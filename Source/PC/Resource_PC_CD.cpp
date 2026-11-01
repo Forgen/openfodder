@@ -23,6 +23,14 @@
 #include "stdafx.hpp"
 
 #include <algorithm>
+#include <cstdlib>
+#include <fstream>
+
+#ifdef WIN32
+#include <direct.h>		// _mkdir
+#else
+#include <sys/stat.h>	// mkdir
+#endif
 
 const uint8 cResource_PC_CD::byte_29921[0x100] = {
     3,   3,   3,   3,   3,   3,   3,   3,   3,   3, 
@@ -103,6 +111,11 @@ cResource_PC_CD::cResource_PC_CD( const std::string& pDataFile ) : cResources() 
 	}
 
 	headerLoad();
+
+	// Dev aid: set OF_EXTRACT=1 to dump every file in the archive,
+	// decoded, into ./ExtractedData/ at startup
+	if (std::getenv("OF_EXTRACT"))
+		ExtractFiles();
 }
 
 cResource_PC_CD::~cResource_PC_CD() {
@@ -144,15 +157,23 @@ bool cResource_PC_CD::headerLoad() {
 
 void cResource_PC_CD::ExtractFiles() {
 
+	// NOTE: no std::filesystem here -- the project is C++14 (CMakeLists.txt),
+	// where it does not exist yet.
+#ifdef WIN32
+	_mkdir("ExtractedData");
+#else
+	mkdir("ExtractedData", 0755);
+#endif
+
 	for (auto File : mFiles) {
 
 		auto FileData = fileGet( File.mName );
-		/*
-		std::string Filename = local_PathGenerate( File.mName, "ExtractedData", eDataType::eData);
+		if (!FileData->size())
+			continue;
 
-		std::ofstream outfile( Filename, std::ofstream::binary );
+		std::ofstream outfile( "ExtractedData/" + File.mName, std::ofstream::binary );
 		outfile.write( (const char*)FileData->data(), FileData->size() );
-		outfile.close();*/
+		outfile.close();
 	}
 }
 
