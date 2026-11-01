@@ -332,11 +332,20 @@ void cFodder::Briefing_DrawBox(int16 pX, int16 pY, int16 pWidth, int16 pHeight, 
 }
 
 void cFodder::Briefing_Draw_Pixel(int16 pX, int16 pY, uint8 pColor) {
-    uint8* di = mSurface->GetSurfaceBuffer();
+    // pX/pY are logical surface coordinates (border included); on a scaled
+    // surface one logical pixel is an SxS block.
+    const uint32 Scale = mSurface->GetScale();
+    const size_t Width = mSurface->GetWidth();
 
-    di += mSurface->GetWidth() * pY;
-    di += pX;
-    *di = pColor;
+    uint8* di = mSurface->GetSurfaceBuffer();
+    di += Width * (size_t)(pY * (int32)Scale);
+    di += (size_t)(pX * (int32)Scale);
+
+    for (uint32 sub = 0; sub < Scale; ++sub) {
+        uint8* row = di + sub * Width;
+        for (uint32 k = 0; k < Scale; ++k)
+            row[k] = pColor;
+    }
 }
 
 void cFodder::Briefing_Draw_Horizontal_Line(int16 pX, int16 pWidth, int16 pY, uint8 pColor) {
