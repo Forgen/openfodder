@@ -2410,17 +2410,39 @@ int16 cFodder::getWindowWidth() const
     return (int16)mParams->mWindowColumns * 16;
 }
 
+uint32 cFodder::getRenderScale() const
+{
+    // Surface scaling is a PC-only path for now (the Amiga blitters are not
+    // scale-aware). Only 2x and 4x are supported.
+    if (!mParams || !mVersionCurrent || !mVersionCurrent->isPC())
+        return 1;
+
+    if (mParams->mRenderScale == 2 || mParams->mRenderScale == 4)
+        return (uint32)mParams->mRenderScale;
+
+    return 1;
+}
+
 cDimension cFodder::getSurfaceSize() const
 {
+    cDimension Size;
+
     if (!mParams->mWindowColumns || !mParams->mWindowRows)
     {
         if (mVersionCurrent)
-            return mVersionCurrent->GetScreenSize();
-
-        return {352, 364};
+            Size = mVersionCurrent->GetScreenSize();
+        else
+            Size = {352, 364};
+    }
+    else
+    {
+        Size = {(unsigned int)(mParams->mWindowColumns + 2) * 16, (unsigned int)(mParams->mWindowRows + 2) * 16};
     }
 
-    return {(unsigned int)(mParams->mWindowColumns + 2) * 16, (unsigned int)(mParams->mWindowRows + 2) * 16};
+    const uint32 Scale = getRenderScale();
+    Size.mWidth *= Scale;
+    Size.mHeight *= Scale;
+    return Size;
 }
 
 cDimension cFodder::getWindowSize() const
@@ -2562,6 +2584,11 @@ void cFodder::Prepare(std::shared_ptr<sFodderParameters> pParams)
     mSurface2 = new cSurface(getSurfaceSize());
     mSurfaceFinal = new cSurface(getSurfaceSize());
     mSurfaceRecruit = new cSurface(getSurfaceSize());
+
+    mSurface->SetScale(getRenderScale());
+    mSurface2->SetScale(getRenderScale());
+    mSurfaceFinal->SetScale(getRenderScale());
+    mSurfaceRecruit->SetScale(getRenderScale());
 
     Sprite_Clear_All();
 

@@ -101,6 +101,35 @@ void cGraphics::Sidebar_Copy_To_Surface_Common(int16 pStartY, cSurface* pSurface
 
 	uint8* si = (uint8*)mFodder->mSidebar_Screen_Buffer;
 
+	// Scaled-surface path: block-scale the 48px-wide sidebar strip onto the
+	// scaled surface (each source pixel becomes an SxS block).
+	{
+		cSurface* Target = pSurface ? pSurface : mSurface;
+		const uint32 S = Target->GetScale();
+
+		if (S > 1) {
+			buffer += (16 * S * mSurface->GetWidth()) + (16 * S);
+
+			if (pOffsetSource && pStartY) {
+				buffer += (mSurface->GetWidth() * pStartY * S);
+				si += (0x30 * pStartY);
+			}
+
+			for (unsigned int y = (17 + pStartY) * S; y < mSurface->GetHeight(); ++y) {
+				const uint8* SrcRow = si + (0x30 * ((y / S) - (17 + pStartY)));
+
+				for (unsigned int x = 0; x < 0x30; ++x) {
+					const uint8 v = SrcRow[x];
+					for (uint32 k = 0; k < S; ++k)
+						buffer[(x * S) + k] = v;
+				}
+
+				buffer += mSurface->GetWidth();
+			}
+			return;
+		}
+	}
+
 	buffer += (16 * mSurface->GetWidth()) + 16;
 
 	if (pOffsetSource && pStartY) {

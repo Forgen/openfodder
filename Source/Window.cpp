@@ -388,10 +388,13 @@ void cWindow::WindowDecrease() {
 void cWindow::RenderAt( cSurface* pImage ) {
 	SDL_FRect Src, Dest;
 
-	Src.w = (float)mScreenSize.mWidth;
-	Src.h = (float)mScreenSize.mHeight;
-	Src.x = 16.0f;
-	Src.y = 16.0f;
+	// On a scaled surface, the game area starts at (16*S, 16*S) and spans
+	// the logical screen size multiplied by S.
+	const float Scale = (float)pImage->GetScale();
+	Src.w = (float)mScreenSize.mWidth * Scale;
+	Src.h = (float)mScreenSize.mHeight * Scale;
+	Src.x = 16.0f * Scale;
+	Src.y = 16.0f * Scale;
 
 	if (g_Fodder->mParams->mIntegerScaling || mWindowMode) {
 		Dest.w = (float)GetWindowSize().mWidth;

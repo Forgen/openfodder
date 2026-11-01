@@ -44,6 +44,7 @@ public:
 	size_t mWindowScale;		// Start with window scaled at
 	size_t mWindowRows;
 	size_t mWindowColumns;
+	size_t mRenderScale;		// Indexed-surface render scale for hi-res sprites (1, 2 or 4)
 
 	bool mRandom;               // Start a random map
 	bool mRandomSave;			// Create a random map
@@ -123,6 +124,7 @@ public:
 
 		mWindowRows = 0;
 		mWindowColumns = 0;
+		mRenderScale = 1;
 
 		mRandom = false;
 		mRandomSave = false;

@@ -118,6 +118,49 @@ uint8* cGraphics_PC::GetSpriteData( uint16 pSegment ) {
 	return 0;
 }
 
+uint8* cGraphics_PC::GetSpriteDataHiRes( uint16 pSegment, uint32 pScale ) {
+	switch ( pSegment ) {
+		case eGFX_IN_GAME:
+			if (mSpriteSheet_InGame1_HiRes && mHiResScale_InGame1 == pScale)
+				return mSpriteSheet_InGame1_HiRes->data();
+			break;
+
+		case eGFX_IN_GAME2:
+			if (mSpriteSheet_InGame2_HiRes && mHiResScale_InGame2 == pScale)
+				return mSpriteSheet_InGame2_HiRes->data();
+			break;
+	}
+	return nullptr;
+}
+
+bool cGraphics_PC::IsHiResFramePtr(const uint8* pPtr, uint32 pScale) const {
+	// True when the pointer lies inside a loaded hi-res sheet at this scale.
+	// Used to pick the native blit mode without trusting state set by
+	// whichever code last assigned mVideo_Draw_FrameDataPtr.
+	if (mSpriteSheet_InGame1_HiRes && mHiResScale_InGame1 == pScale) {
+		const uint8* base = mSpriteSheet_InGame1_HiRes->data();
+		if (pPtr >= base && pPtr < base + mSpriteSheet_InGame1_HiRes->size())
+			return true;
+	}
+	if (mSpriteSheet_InGame2_HiRes && mHiResScale_InGame2 == pScale) {
+		const uint8* base = mSpriteSheet_InGame2_HiRes->data();
+		if (pPtr >= base && pPtr < base + mSpriteSheet_InGame2_HiRes->size())
+			return true;
+	}
+	return false;
+}
+
+uint32 cGraphics_PC::GetHiResScale( uint16 pSegment ) const {
+	switch ( pSegment ) {
+		case eGFX_IN_GAME:
+			return mHiResScale_InGame1;
+
+		case eGFX_IN_GAME2:
+			return mHiResScale_InGame2;
+	}
+	return 0;
+}
+
 void cGraphics_PC::Mouse_DrawCursor() {
 	
 	const sSpriteSheet_pstuff* di = &mSpriteSheet_PStuff[mFodder->mMouseSpriteCurrent];
@@ -286,7 +329,83 @@ void cGraphics_PC::Map_Tile_Draw( cSurface *pTarget, uint16 pTile, uint16 pX, ui
 	}
 }
 
+void cGraphics_PC::MapTiles_Draw_Scaled() {
+	// Block-scaled twin of MapTiles_Draw: identical traversal, but each
+	// tile pixel is written as an SxS block on the scaled surface.
+	const uint32 S = mSurface->GetScale();
+	const size_t Width = mSurface->GetWidth();
+
+    uint8* Target = mSurface->GetSurfaceBuffer();
+
+    uint8* CurrentMapPtr = mFodder->mMap->data() + mFodder->mMapTile_Ptr;
+
+    // Y
+    for (uint16 cx = 0; cx <= g_Fodder->getWindowRows() + 1; ++cx) {
+        uint8* MapPtr = CurrentMapPtr;
+        uint8* TargetRow = Target;
+
+        uint16 StartY = 0;
+
+        if (cx == 0)
+            StartY = mFodder->mMapTile_RowOffset;
+
+        // X
+        for (uint16 cx2 = 0; cx2 <= g_Fodder->getWindowColumns() + 1; ++cx2) {
+            uint8* TargetTmp = TargetRow;
+
+            // Verify we are inside the actual map data
+            if (MapPtr >= mFodder->mMap->data()) {
+
+                if (MapPtr >= mFodder->mMap->data() + mFodder->mMap->size())
+                    continue;
+
+                uint16 Tile = readLE<uint16>(MapPtr) & 0x1FF;
+                if (Tile > 0x1DF)
+                    Tile = 0;
+
+                uint8* TilePtr = mTile_Gfx_Ptrs[Tile];
+                uint16 StartX = 0;
+
+                TilePtr += StartY * 0x140;
+
+                if (cx2 == 0)
+                    StartX = mFodder->mMapTile_ColumnOffset;
+
+                // Each Tile Row
+                for (uint16 i = StartY; i < 16; ++i) {
+
+                    for (uint32 sub = 0; sub < S; ++sub) {
+                        uint8* d = TargetTmp + (sub * Width);
+                        const uint8* src = TilePtr + StartX;
+
+                        for (uint16 px = StartX; px < 16; ++px) {
+                            const uint8 v = *src++;
+                            for (uint32 k = 0; k < S; ++k)
+                                *d++ = v;
+                        }
+                    }
+
+                    TilePtr += 0x140;
+                    TargetTmp += Width * S;
+                }
+
+                MapPtr += 2;
+                TargetRow += (16 - StartX) * S;
+            }
+        }
+
+        Target += Width * (16 - StartY) * S;
+        CurrentMapPtr += mFodder->mMapLoaded->getWidth() << 1;
+    }
+    mSurface->Save();
+}
+
 void cGraphics_PC::MapTiles_Draw() {
+
+	if (mSurface->GetScale() > 1) {
+		MapTiles_Draw_Scaled();
+		return;
+	}
 
     uint8* Target = mSurface->GetSurfaceBuffer();
 
@@ -389,12 +508,142 @@ void cGraphics_PC::Map_Load_Resources() {
 	// Sprites on Sheet1 occupy palette range from 0xA0-0xAF
 	mSpriteSheet_InGame1.CopyPalette(&mPalette[0xA0], 0x10, 0xA0);
 
+	// Scaled-surface hi-res path: look for <name>_highres_<scale>x.dat next
+	// to the original sheet (loose-file override rules apply). The hi-res
+	// sheet is the original layout with its pixel area scaled by S: pixel
+	// bytes are the bytes before the first embedded palette (army 0xD200,
+	// copt 0xD2A0); the tail (palettes and anything after) is unchanged.
+	mHiResScale_InGame1 = 0;
+	mHiResScale_InGame2 = 0;
+	mSpriteSheet_InGame1_HiRes.reset();
+	mSpriteSheet_InGame2_HiRes.reset();
+
+	if (mFodder->getRenderScale() > 1) {
+		Map_Load_HiRes_Sheet( mFodder->mFilenameArmy, 0xD200, mSpriteSheet_InGame1.mData->size(), mSpriteSheet_InGame1_HiRes, mHiResScale_InGame1 );
+		Map_Load_HiRes_Sheet( mFodder->mFilenameCopt, 0xD2A0, mSpriteSheet_InGame2.mData->size(), mSpriteSheet_InGame2_HiRes, mHiResScale_InGame2 );
+	}
+
 	SetActiveSpriteSheet( eGFX_IN_GAME );
+}
+
+void cGraphics_PC::Map_Load_HiRes_Sheet(const std::string& pFilename, size_t pPixelBytes, size_t pOriginalSize, tSharedBuffer& pOutData, uint32& pOutScale) {
+	const uint32 Scale = mFodder->getRenderScale();
+
+	std::string HiResName = pFilename;
+	const std::string Ext = ".dat";
+	if (HiResName.size() >= Ext.size() && HiResName.compare(HiResName.size() - Ext.size(), Ext.size(), Ext) == 0)
+		HiResName.erase(HiResName.size() - Ext.size());
+	HiResName += "_highres_" + std::to_string(Scale) + "x.dat";
+
+	// cResource_PC_CD::fileGet exits the process when a name is in neither
+	// the loose files nor the archive, so probe existence first.
+	if (!g_ResourceMan->FileExists(mFodder->mVersionCurrent->getDataFilePath(HiResName)))
+		return;
+
+	auto Data = g_Resource->fileGet( HiResName );
+	if (!Data || !Data->size())
+		return;
+
+	const size_t ExpectedSize = (pPixelBytes * Scale * Scale) + (pOriginalSize - pPixelBytes);
+	if (Data->size() != ExpectedSize) {
+		std::cout << "Hi-res sheet " << HiResName << " has size " << Data->size() << ", expected " << ExpectedSize << " -- ignoring\n";
+		return;
+	}
+
+	std::cout << "Hi-res sheet " << HiResName << " loaded at " << Scale << "x\n";
+	pOutData = Data;
+	pOutScale = Scale;
 }
 
 void cGraphics_PC::Video_Draw_8(cSurface *pTarget, const uint8* RowPallete) {
 	if (!pTarget)
 		pTarget = mSurface;
+
+	// Scaled-surface path (see report section 5): the target surface holds
+	// S physical pixels per game pixel. Two source modes:
+	//  - native: the frame comes from a hi-res sheet at the same scale, so
+	//    source pixels map 1:1 onto the surface;
+	//  - block: the frame comes from an original sheet, so each source
+	//    pixel becomes an SxS block of the same palette index.
+	if (pTarget->GetScale() > 1) {
+		const uint32 S = pTarget->GetScale();
+
+		uint8* si = mFodder->mVideo_Draw_FrameDataPtr;
+		const uint32 SrcScale = IsHiResFramePtr(si, S) ? S : 1;
+
+		uint8* diBase = pTarget->GetSurfaceBuffer();
+		diBase += (size_t)pTarget->GetWidth() * (mFodder->mVideo_Draw_PosY * (int32)S);
+		diBase += mFodder->mVideo_Draw_PosX * (int32)S;
+
+		if (SrcScale == S) {
+			const int32 ColsBytes = (mFodder->mVideo_Draw_Columns * (int32)S) >> 1;
+			const size_t SrcSkip = (size_t)160 * S - (size_t)ColsBytes;
+			const int32 Rows = mFodder->mVideo_Draw_Rows * (int32)S;
+
+			uint8* di = diBase;
+			for (int32 dx = 0; dx < Rows; ++dx) {
+				uint8 Palette = mFodder->mVideo_Draw_PaletteIndex;
+				if (RowPallete)
+					Palette = RowPallete[mFodder->mVideo_Draw_PosY + (dx / (int32)S)];
+
+				uint8* d = di;
+				for (int32 cx = ColsBytes; cx > 0; --cx) {
+					uint8 ah = *si++;
+
+					uint8 al = ah >> 4;
+					if (al)
+						*d = al | Palette;
+
+					al = ah & 0x0F;
+					if (al)
+						*(d + 1) = al | Palette;
+
+					d += 2;
+				}
+
+				si += SrcSkip;
+				di += pTarget->GetWidth();
+			}
+		}
+		else {
+			const int32 ColsBytes = mFodder->mVideo_Draw_Columns >> 1;
+			const size_t SrcStride = 160;
+
+			for (int32 dx = 0; dx < mFodder->mVideo_Draw_Rows; ++dx) {
+				uint8 Palette = mFodder->mVideo_Draw_PaletteIndex;
+				if (RowPallete)
+					Palette = RowPallete[mFodder->mVideo_Draw_PosY + dx];
+
+				for (uint32 sub = 0; sub < S; ++sub) {
+					uint8* s2 = si;
+					uint8* d = diBase + ((size_t)(dx * (int32)S + (int32)sub) * pTarget->GetWidth());
+
+					for (int32 cx = ColsBytes; cx > 0; --cx) {
+						uint8 ah = *s2++;
+
+						uint8 al = ah >> 4;
+						if (al) {
+							const uint8 v = al | Palette;
+							for (uint32 k = 0; k < S; ++k)
+								d[k] = v;
+						}
+						d += S;
+
+						al = ah & 0x0F;
+						if (al) {
+							const uint8 v = al | Palette;
+							for (uint32 k = 0; k < S; ++k)
+								d[k] = v;
+						}
+						d += S;
+					}
+				}
+
+				si += SrcStride;
+			}
+		}
+		return;
+	}
 
 	uint8*	di = pTarget->GetSurfaceBuffer();
 	uint8* 	si = mFodder->mVideo_Draw_FrameDataPtr;
@@ -436,6 +685,37 @@ void cGraphics_PC::Video_Draw_8(cSurface *pTarget, const uint8* RowPallete) {
 }
 
 void cGraphics_PC::Video_Draw_16(const uint8* RowPallete) {
+	// Scaled-surface path: block-scale each 8bpp source pixel to an SxS
+	// block (there are no hi-res sources for the Draw_16 sheets).
+	if (mSurface->GetScale() > 1) {
+		const uint32 S = mSurface->GetScale();
+
+		uint8* diBase = mSurface->GetSurfaceBuffer();
+		diBase += (size_t)mSurface->GetWidth() * (mFodder->mVideo_Draw_PosY * (int32)S);
+		diBase += mFodder->mVideo_Draw_PosX * (int32)S;
+
+		uint8* si = mFodder->mVideo_Draw_FrameDataPtr;
+
+		for (int32 dx = 0; dx < mFodder->mVideo_Draw_Rows; ++dx) {
+			for (uint32 sub = 0; sub < S; ++sub) {
+				uint8* s2 = si;
+				uint8* d = diBase + ((size_t)(dx * (int32)S + (int32)sub) * mSurface->GetWidth());
+
+				for (int32 cx = 0; cx < mFodder->mVideo_Draw_Columns; ++cx) {
+					const uint8 al = *s2++;
+					if (al) {
+						for (uint32 k = 0; k < S; ++k)
+							d[k] = al;
+					}
+					d += S;
+				}
+			}
+
+			si += mFodder->mVideo_Draw_ColumnsMax;
+		}
+		return;
+	}
+
 	uint8*	di = mSurface->GetSurfaceBuffer();
 	uint8* 	si = mFodder->mVideo_Draw_FrameDataPtr;
 
@@ -675,7 +955,11 @@ void cGraphics_PC::Mission_Intro_DrawHelicopter( uint16 ) {
 bool cGraphics_PC::Sprite_OnScreen_Check() {
 	int16 ax;
 
-	if (!Sprite_OnScreen_ClipY(0xA0))
+	// Hi-res sources are laid out at S times the row stride and S rows per
+	// game row, so a clipped game row advances the source pointer by
+	// 0xA0 * S * S bytes instead of 0xA0.
+	const uint16 SrcScale = mFodder->mVideo_Draw_SourceScale;
+	if (!Sprite_OnScreen_ClipY(SrcScale > 1 ? (int16)(0xA0 * SrcScale * SrcScale) : 0xA0))
 		return false;
 	if (!Sprite_OnScreen_ClipBottom())
 		return false;
@@ -693,8 +977,12 @@ bool cGraphics_PC::Sprite_OnScreen_Check() {
 
 		mFodder->mVideo_Draw_PosX += ax;
 		mFodder->mVideo_Draw_Columns -= ax;
-		ax >>= 1;
-		mFodder->mVideo_Draw_FrameDataPtr += ax;
+		if (SrcScale > 1)
+			mFodder->mVideo_Draw_FrameDataPtr += (ax * (int16)SrcScale) >> 1;
+		else {
+			ax >>= 1;
+			mFodder->mVideo_Draw_FrameDataPtr += ax;
+		}
 
 		// Ensure the destination X never remains negative after clipping.
 		// A remaining -1 here would underflow the destination pointer in Video_Draw_8.

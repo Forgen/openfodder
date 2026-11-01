@@ -58,6 +58,7 @@ protected:
 	SDL_Texture*	mTexture;
 
 	size_t			mWidth, mHeight;
+	uint32			mScale = 1;		// Physical pixels per game pixel (hi-res surface scaling)
 	bool			mPaletteAdjusting;
 
 
@@ -72,6 +73,9 @@ public:
 					cSurface( size_t pWidth, size_t pHeight );
 					cSurface( const cDimension& pDimension );
 					~cSurface();
+
+	uint32			GetScale() const { return mScale; }
+	void			SetScale(uint32 pScale) { mScale = pScale ? pScale : 1; }
 
 	void			clearBuffer(size_t pColor = 0);
 

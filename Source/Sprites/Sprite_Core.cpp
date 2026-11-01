@@ -83,7 +83,7 @@ void cFodder::Sprite_Draw_Frame(sSprite* pDi, int16 pSpriteType, int16 pFrame, c
     auto SheetData = Sprite_Get_Sheet(pSpriteType, pFrame);
 
     mVideo_Draw_PaletteIndex = SheetData->mPalleteIndex & 0xFF;
-    mVideo_Draw_FrameDataPtr = SheetData->GetGraphicsPtr();
+    mVideo_Draw_FrameDataPtr = Sprite_Get_FrameDataPtr(SheetData);
 
     mVideo_Draw_Columns = SheetData->mColCount;
     mVideo_Draw_Rows = SheetData->mRowCount - pDi->mRowsToSkip;
@@ -592,6 +592,29 @@ const sSpriteSheet* cFodder::Sprite_Get_Sheet(int16 pSpriteType, int16 pFrame) {
     const sSpriteSheet* Sheet = &mSprite_SheetPtr[pSpriteType][pFrame];
 
     return Sheet;
+}
+
+uint8* cFodder::Sprite_Get_FrameDataPtr(const sSpriteSheet* pSheet) {
+    // Scaled-surface hi-res path: if a hi-res sheet was loaded for this
+    // segment at the surface's render scale, point into it instead.
+    // The hi-res sheet keeps the original layout scaled by S: each original
+    // row of 160 bytes becomes S rows of 160*S bytes.
+    mVideo_Draw_SourceScale = 1;
+
+    const uint32 Scale = getRenderScale();
+    if (Scale > 1 && mGraphics) {
+        if (mGraphics->GetHiResScale(pSheet->mLoadSegment) == Scale) {
+            uint8* HiRes = mGraphics->GetSpriteDataHiRes(pSheet->mLoadSegment, Scale);
+            if (HiRes) {
+                mVideo_Draw_SourceScale = (uint16)Scale;
+
+                const uint32 Offset = pSheet->mLoadOffset;
+                return HiRes + ((Offset / 160) * (160 * Scale * Scale)) + ((Offset % 160) * Scale);
+            }
+        }
+    }
+
+    return pSheet->GetGraphicsPtr();
 }
 
 void cFodder::Sprite_SetDirectionMod(sSprite* pSprite) {

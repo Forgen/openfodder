@@ -225,6 +225,11 @@ void cSurface::draw(const int16 pSkipX, const int16 pSkipY) {
 	if (mIsLoadedImage)
 		return;
 
+	// Callers pass the border skip in game pixels; on a scaled surface the
+	// border is mScale times wider in physical pixels.
+	const int16 SkipX = (int16)(pSkipX * (int16)mScale);
+	const int16 SkipY = (int16)(pSkipY * (int16)mScale);
+
 	const uint8_t* bufferCurrent = mSurfaceBuffer;
 	const uint8_t* const bufferEnd = mSurfaceBuffer + mSurfaceBufferSize;
 	uint32_t* bufferTarget = reinterpret_cast<uint32_t*>(mSDLSurface->pixels);
@@ -233,16 +238,16 @@ void cSurface::draw(const int16 pSkipX, const int16 pSkipY) {
 	clearSDLSurface(0);
 
 	// Skip 'skipY' rows of pixels
-	bufferCurrent += width * pSkipY;
-	bufferTarget += width * pSkipY;
+	bufferCurrent += width * SkipY;
+	bufferTarget += width * SkipY;
 
-	for (int y = pSkipY; y < height; ++y) {
+	for (int y = SkipY; y < height; ++y) {
 		// Skip first 'skipX' pixels
-		bufferCurrent += pSkipX;
-		bufferTarget += pSkipX;
+		bufferCurrent += SkipX;
+		bufferTarget += SkipX;
 
 		// Process remaining pixels
-		for (int x = pSkipX; x < width; ++x) {
+		for (int x = SkipX; x < width; ++x) {
 			if (bufferCurrent >= bufferEnd) break;
 
 			uint8_t currentPixel = *bufferCurrent++;

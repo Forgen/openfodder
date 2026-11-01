@@ -46,11 +46,23 @@ class cGraphics_PC : public cGraphics {
 	uint16          mMission_Intro_DrawX;
 	uint16          mMission_Intro_DrawY;
 
+	// Hi-res in-game sheets (scaled-surface path, see Map_Load_Resources)
+	tSharedBuffer		mSpriteSheet_InGame1_HiRes;
+	tSharedBuffer		mSpriteSheet_InGame2_HiRes;
+	uint32				mHiResScale_InGame1 = 0;
+	uint32				mHiResScale_InGame2 = 0;
+
+	void				Map_Load_HiRes_Sheet(const std::string& pFilename, size_t pPixelBytes, size_t pOriginalSize, tSharedBuffer& pOutData, uint32& pOutScale);
+	bool				IsHiResFramePtr(const uint8* pPtr, uint32 pScale) const;
+	void				MapTiles_Draw_Scaled();
+
 	public:
 						 cGraphics_PC();
 	virtual				~cGraphics_PC();
 
 	virtual uint8*		GetSpriteData( uint16 pSegment );
+	virtual uint8*		GetSpriteDataHiRes( uint16 pSegment, uint32 pScale );
+	virtual uint32		GetHiResScale( uint16 pSegment ) const;
 	virtual void		Mouse_DrawCursor();
 
 	virtual void		Tile_Prepare_Gfx();

@@ -544,6 +544,7 @@ public:
     size_t          mDraw_Source_SkipPixelsPerRow;
     size_t          mDraw_Dest_SkipPixelsPerRow;
     uint16          mVideo_Draw_ColumnsMax;
+    uint16          mVideo_Draw_SourceScale = 1;	// Scale of the current frame's source data (1 = original sheet)
 
     bool            mBriefing_Screen_Active;
     int32           mBriefingHelicopter_ScreenX;
@@ -1381,6 +1382,8 @@ public:
 
 	cDimension		getSurfaceSize() const;
 	cDimension		getWindowSize() const;
+	uint32			getRenderScale() const;
+	uint8*			Sprite_Get_FrameDataPtr(const sSpriteSheet* pSheet);
 	int16			getWindowWidth() const;
 
 	int16			getWindowRows() const;

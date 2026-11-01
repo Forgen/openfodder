@@ -132,6 +132,7 @@ void sFodderParameters::PrepareOptions() {
 
 		("columns", "Number of camera columns", cxxopts::value<std::uint32_t>()->default_value("22"), "22")
 		("rows", "Number of camera rows", cxxopts::value<std::uint32_t>()->default_value("16"), "16")
+		("render-scale", "Render the indexed surface at this integer scale (1, 2 or 4); enables <name>_highres_<scale>x.dat sprite sheets on PC", cxxopts::value<std::uint32_t>()->default_value("1"), "1")
 
 		("alternate-mouse", "Play with non-original mouse behaviour", cxxopts::value<bool>()->default_value("false"))
 		("w,window", "Start in window mode", cxxopts::value<bool>()->default_value("false"))
@@ -292,6 +293,14 @@ bool sFodderParameters::ProcessCLI(int argc, char *argv[]) {
 		if (result.count("columns"))
 			mWindowColumns = result["columns"].as<std::uint32_t>();
 
+		if (result.count("render-scale")) {
+			mRenderScale = result["render-scale"].as<std::uint32_t>();
+			if (mRenderScale != 1 && mRenderScale != 2 && mRenderScale != 4) {
+				std::cout << "Invalid render-scale " << mRenderScale << ", using 1\n";
+				mRenderScale = 1;
+			}
+		}
+
 		if (result.count("script"))
 			mScriptRun = result["script"].as<std::string>();
 
@@ -373,6 +382,7 @@ bool sFodderParameters::SaveIni() {
 
 		ini.set("columns", (mWindowColumns == 0) ? "0" : std::to_string(mWindowColumns));
 		ini.set("rows", (mWindowRows == 0) ? "0" : std::to_string(mWindowRows));
+		ini.set("renderscale", std::to_string(mRenderScale));
 
 		ini.set("alternate-mouse", mMouseAlternative ? "true" : "false");
 		ini.set("mouse-locked", mMouseLocked ? "true" : "false");
@@ -465,6 +475,10 @@ bool sFodderParameters::ProcessINI() {
 			else {
 				mWindowColumns = ini.get("columns", 22);
 			}
+
+			mRenderScale = ini.get("renderscale", 1);
+			if (mRenderScale != 1 && mRenderScale != 2 && mRenderScale != 4)
+				mRenderScale = 1;
 
 			if (ini.get("rows", "0") == "0")
 				mWindowRows = 0;

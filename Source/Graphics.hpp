@@ -181,6 +181,11 @@ public:
 	virtual				~cGraphics() { };
 
 	virtual uint8*		GetSpriteData( uint16 pSegment ) = 0;
+
+	// Hi-res sprite data (scaled-surface path): return the base of the
+	// hi-res sheet for a segment at the given scale, or null if none loaded.
+	virtual uint8*		GetSpriteDataHiRes( uint16 pSegment, uint32 pScale ) { return nullptr; }
+	virtual uint32		GetHiResScale( uint16 pSegment ) const { return 0; }
 	virtual void		Mouse_DrawCursor() = 0;
 	virtual void		Load_pStuff() = 0;
 

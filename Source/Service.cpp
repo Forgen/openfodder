@@ -341,7 +341,7 @@ int16 cFodder::Service_Sprite_Draw(int16& pSpriteType, int16& pFrame, int16& pX,
     auto SheetData = Sprite_Get_Sheet(pSpriteType, pFrame);
 
     mVideo_Draw_PaletteIndex = SheetData->mPalleteIndex & 0xFF;
-    mVideo_Draw_FrameDataPtr = SheetData->GetGraphicsPtr();
+    mVideo_Draw_FrameDataPtr = Sprite_Get_FrameDataPtr(SheetData);
 
     mVideo_Draw_PosX = pX + 0x10;
     mVideo_Draw_PosY = pY + 0x10;

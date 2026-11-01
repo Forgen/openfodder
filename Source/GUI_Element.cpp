@@ -1011,7 +1011,7 @@ void cFodder::GUI_Draw_Frame_8(int32 pSpriteType, int32 pFrame, const size_t pPo
     auto SheetData = Sprite_Get_Sheet(pSpriteType, pFrame);
 
     mVideo_Draw_PaletteIndex = SheetData->mPalleteIndex & 0xFF;
-    mVideo_Draw_FrameDataPtr = SheetData->GetGraphicsPtr();
+    mVideo_Draw_FrameDataPtr = Sprite_Get_FrameDataPtr(SheetData);
 
     mVideo_Draw_PosX = (int16)(pPositionX + 0x10);
     mVideo_Draw_PosY = (int16)(pPositionY + 0x10);
@@ -1030,7 +1030,7 @@ void cFodder::GUI_Draw_Frame_16(int16 pSpriteType, int16 pFrame, const size_t pP
     auto SheetData = Sprite_Get_Sheet(pSpriteType, pFrame);
 
     mVideo_Draw_PaletteIndex = SheetData->mPalleteIndex & 0xFF;
-    mVideo_Draw_FrameDataPtr = SheetData->GetGraphicsPtr();
+    mVideo_Draw_FrameDataPtr = Sprite_Get_FrameDataPtr(SheetData);
 
     mVideo_Draw_PosX = (int16)(pPosX + 0x10);
     mVideo_Draw_PosY = (int16)(pPosY + 0x10);
