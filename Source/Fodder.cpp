@@ -2414,13 +2414,25 @@ uint32 cFodder::getRenderScale() const
 {
     // Surface scaling is a PC-only path for now (the Amiga blitters are not
     // scale-aware). Only 2x and 4x are supported.
-    if (!mParams || !mVersionCurrent || !mVersionCurrent->isPC())
+    if (!mParams)
         return 1;
 
-    if (mParams->mRenderScale == 2 || mParams->mRenderScale == 4)
-        return (uint32)mParams->mRenderScale;
+    if (mParams->mRenderScale != 2 && mParams->mRenderScale != 4)
+        return 1;
 
-    return 1;
+    // The surfaces are created in Prepare(), before Start() switches to the
+    // version that will actually run, so mVersionCurrent is usually still
+    // null here. Fall back to the same retail version Start() will pick;
+    // without this the surfaces are built at scale 1 while the hi-res
+    // sheets still load, and every frame is blit with the wrong stride.
+    const sGameVersion* Version = mVersionCurrent;
+    if (!Version && mVersions)
+        Version = mVersions->GetRetail(mParams->mDefaultPlatform, mParams->mDefaultGame);
+
+    if (!Version || !Version->isPC())
+        return 1;
+
+    return (uint32)mParams->mRenderScale;
 }
 
 cDimension cFodder::getSurfaceSize() const
