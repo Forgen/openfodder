@@ -29,7 +29,6 @@
 #ifdef WIN32
 #include <direct.h>		// _mkdir
 #else
-#include <sys/stat.h>	// mkdir
 #endif
 
 const uint8 cResource_PC_CD::byte_29921[0x100] = {
@@ -157,8 +156,6 @@ bool cResource_PC_CD::headerLoad() {
 
 void cResource_PC_CD::ExtractFiles() {
 
-	// NOTE: no std::filesystem here -- the project is C++14 (CMakeLists.txt),
-	// where it does not exist yet.
 #ifdef WIN32
 	_mkdir("ExtractedData");
 #else
