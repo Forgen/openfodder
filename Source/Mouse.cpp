@@ -39,6 +39,8 @@ void cFodder::Mouse_Setup() {
 }
 
 void cFodder::Mouse_Cursor_Handle() {
+    // Native cursor visibility is maintained by cWindow on the GUI thread,
+    // independently of input ticks and relative capture.
 	static int32 CaptureBlockFrames = 0;
     static bool MouseCapturedGlobal = false;
 	const cDimension scale = mWindow->GetScale();
@@ -62,7 +64,6 @@ void cFodder::Mouse_Cursor_Handle() {
         mWindow->SetRelativeMouseMode(false);
         SDL_GetRelativeMouseState(nullptr, nullptr);
         mMouse_EventLastPositionRelative = { 0, 0 };
-        SDL_ShowCursor();
         mWindow_MouseInside = false;
 
         if (MouseCapturedGlobal) {
@@ -87,11 +88,11 @@ void cFodder::Mouse_Cursor_Handle() {
         mWindow->SetMousePositionInWindow(static_cast<float>(x), static_cast<float>(y));
     };
 
-	if (mStartParams->mMouseAlternative) {
-		mInputMouseX = (mMouse_EventLastPosition.mX / scale.getWidth()) + MOUSE_POSITION_X_ADJUST;
-		mInputMouseY = (mMouse_EventLastPosition.mY / scale.getHeight()) + MOUSE_POSITION_Y_ADJUST;
-		return;
-	}
+    if (mStartParams->mMouseAlternative) {
+        mInputMouseX = (mMouse_EventLastPosition.mX / scale.getWidth()) + MOUSE_POSITION_X_ADJUST;
+        mInputMouseY = (mMouse_EventLastPosition.mY / scale.getHeight()) + MOUSE_POSITION_Y_ADJUST;
+        return;
+    }
 
     if (!mWindow_Focus) {
         if (CursorCaptured) {
@@ -99,7 +100,6 @@ void cFodder::Mouse_Cursor_Handle() {
             mWindow->SetRelativeMouseMode(false);
             SDL_GetRelativeMouseState(nullptr, nullptr);
             mMouse_EventLastPositionRelative = { 0, 0 };
-            SDL_ShowCursor();
         }
         mWindow_MouseInside = false;
         if (MouseCapturedGlobal) {
@@ -138,7 +138,6 @@ void cFodder::Mouse_Cursor_Handle() {
             CaptureBlockFrames = 1;
             CursorCaptured = true;
             mWindow->SetRelativeMouseMode(true);
-            SDL_HideCursor();
             SDL_GetRelativeMouseState(nullptr, nullptr);
             mMouse_EventLastPositionRelative = { 0, 0 };
         }

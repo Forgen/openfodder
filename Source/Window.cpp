@@ -23,6 +23,16 @@
 #include "stdafx.hpp"
 #include <sstream>
 
+// Native SDL dialogs (such as download progress) own their own cursor.
+// A missing SDL focus means the pointer is outside SDL, where the desktop
+// supplies it; keeping SDL's game cursor hidden also prevents an entry flash.
+static bool GameOwnsCursor(SDL_Window* window) {
+    if (!window) return false;
+    const auto keyboard = SDL_GetKeyboardFocus();
+    const auto mouse = SDL_GetMouseFocus();
+    return (!keyboard || keyboard == window) && (!mouse || mouse == window);
+}
+
 cWindow::cWindow() {
 
 	mOriginalResolution.mWidth = 320;
@@ -41,6 +51,8 @@ cWindow::cWindow() {
 
     mHasFocus = true;
 	mResized = false;
+
+	mBilinearFilter = false;
 }
 
 cWindow::~cWindow() {
@@ -77,6 +89,9 @@ bool cWindow::InitWindow( const std::string& pWindowTitle ) {
 	}
 
 	SDL_SetHintWithPriority(SDL_HINT_MOUSE_RELATIVE_WARP_MOTION, "1", SDL_HINT_OVERRIDE);
+    // Capture is explicit. Hidden edge warps must not activate SDL's automatic
+    // warp-to-relative emulation when the player releases the mouse.
+    SDL_SetHintWithPriority(SDL_HINT_MOUSE_EMULATE_WARP_WITH_RELATIVE, "0", SDL_HINT_OVERRIDE);
 	SetMouseSpeed(g_Fodder ? (float)g_Fodder->mStartParams->mMouseSpeed : 1.5f);
 
 
@@ -90,7 +105,7 @@ bool cWindow::InitWindow( const std::string& pWindowTitle ) {
     }
 
 	if (!g_Fodder->mParams->mMouseAlternative || (g_Fodder->mParams->mMouseAlternative && g_Fodder->mParams->mMouseLocked)) {
-		SDL_SetWindowRelativeMouseMode(mWindow, true);
+		SetRelativeMouseMode(true);
 
 		// Warp mouse to 0,0 to fix an issue with the mouse cursor appearing on first click in the window
 		SDL_WarpMouseInWindow(mWindow, 0, 0);
@@ -111,6 +126,10 @@ void cWindow::ToggleVSync(bool pEnabled) {
 void cWindow::SetRelativeMouseMode(bool pEnable) {
 
     if (mWindow) {
+        // Capture and native cursor visibility are independent. Neither
+        // entering nor leaving relative mode should show an arrow in the game.
+        if (SDL_IsMainThread() && GameOwnsCursor(mWindow))
+            SDL_HideCursor();
         SDL_SetWindowRelativeMouseMode(mWindow, pEnable);
     }
 }
@@ -270,21 +289,25 @@ void cWindow::EventCheck() {
 		case SDL_EVENT_QUIT:
 			Event.mType = eEvent_Quit;
 			break;
+
+		case SDL_EVENT_DROP_FILE:
+			// SDL3 drop events: SysEvent.drop.data is the path string,
+			// owned by SDL and only valid until the next SDL_PumpEvents.
+			// Copy it into the cEvent payload so we can defer processing.
+			Event.mType = eEvent_FileDrop;
+			if (SysEvent.drop.data)
+				Event.mDropPath = SysEvent.drop.data;
+			break;
 		}
 
-#ifdef EMSCRIPTEN
-		// Drop events which have no x/y
-		if (SysEvent.type == SDL_EVENT_MOUSE_MOTION || 
-			SysEvent.type == SDL_EVENT_MOUSE_BUTTON_DOWN || 
-			SysEvent.type == SDL_EVENT_MOUSE_BUTTON_UP) {
-
-			if (Event.mPosition.mX == 0 || Event.mPosition.mY == 0)
-				continue;
-		}
-#endif
 		if ( Event.mType != eEvent_None )
 			mEvents.push_back( Event );
 	}
+    if (GameOwnsCursor(mWindow)) {
+        SDL_HideCursor();
+        if (SDL_GetMouseFocus() == mWindow)
+            SDL_SetCursor(nullptr);
+    }
 }
 
 void cWindow::CalculateWindowSize() {
@@ -333,15 +356,10 @@ bool cWindow::CanChangeToMultiplier( const int pNewMultiplier ) {
 }
 
 void cWindow::FrameEnd() {
-    #ifndef EMSCRIPTEN
 	SDL_RenderPresent( mRenderer );
     
 	SDL_SetRenderDrawColor(mRenderer, 0, 0, 0, 0);
 	SDL_RenderClear( mRenderer );
-	#else
-	SDL_SetRenderDrawColor(mRenderer, 0, 0, 0, 0);
-	//SDL_RenderClear( mRenderer );
-#endif
 }
 
 void cWindow::PositionWindow() {
@@ -424,6 +442,13 @@ void cWindow::RenderAt( cSurface* pImage ) {
 		}
 	}
 
+	if (g_Fodder->mParams->mBilinearFilter) {
+		SDL_SetTextureScaleMode(pImage->GetTexture(), SDL_SCALEMODE_LINEAR);
+	}
+	else {
+		SDL_SetTextureScaleMode(pImage->GetTexture(), SDL_SCALEMODE_NEAREST);
+	}
+
 	SDL_RenderTexture( mRenderer, pImage->GetTexture(), &Src, &Dest );
 }
 
@@ -451,6 +476,13 @@ void cWindow::RenderShrunk( cSurface* pImage ) {
 			Dest.x = 0.0f;
 			Dest.y = 0.0f;
 		}
+	}
+
+	if (g_Fodder->mParams->mBilinearFilter) {
+		SDL_SetTextureScaleMode(pImage->GetTexture(), SDL_SCALEMODE_LINEAR);
+	}
+	else {
+		SDL_SetTextureScaleMode(pImage->GetTexture(), SDL_SCALEMODE_NEAREST);
 	}
 
 	SDL_RenderTexture( mRenderer, pImage->GetTexture(), &Src, &Dest);

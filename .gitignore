@@ -350,6 +350,7 @@ healthchecksdb
 
 # Ignore any folder starting with build, use for cmake out of tree builds.
 /build*
+/RunE/
 
 # Ignore neatbeans projects.
 nbproject/
@@ -358,3 +359,13 @@ Projects/emscripten/build-ems/
 Projects/emscripten/.emsdk_cache/
 /Projects/VS
 /Projects/VS32
+/Projects/VS-vcpkg-*
+/Documentation
+/MapDumps
+/MapDumps_Originals
+/MapDumps
+/Tests/*
+!/Tests/AudioMixer/
+!/Tests/VideoMPEG/
+!/Tests/DownloadProgress/
+!/Tests/SetupFolders/

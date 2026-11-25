@@ -37,6 +37,7 @@ class cWindow {
 		bool				mWindowMode;
         bool                mHasFocus;
 		bool				mResized;
+		bool				mBilinearFilter;
 
 	protected:
 
@@ -88,6 +89,7 @@ class cWindow {
 		void				ClearResized();
 
 		SDL_Renderer*		GetRenderer() const { return mRenderer; };
+		SDL_Window*			GetWindow() const { return mWindow; }
 
         cPosition           GetWindowPosition() const;
         int32				GetWindowWidth() const;
@@ -105,7 +107,7 @@ class cWindow {
 		void				ToggleVSync(bool pEnabled);
 		float				GetRefreshRate();
 
-
+		
 };
 
 class cWindowNull : public cWindow {

@@ -22,6 +22,15 @@
 
 #include "stdafx.hpp"
 
+namespace {
+bool IsPlayerSquadTroop(const sSprite* sprite) {
+    // Enemy sprites reuse field_32 and the mission-troop union for other data.
+    // A squad number alone is not evidence that this is a player troop.
+    return sprite && sprite != INVALID_SPRITE_PTR && sprite->mSpriteType == eSprite_Player &&
+        sprite->mMissionTroop && sprite->field_32 >= 0 && sprite->field_32 < NETWORK_MAX_SQUADS;
+}
+}
+
 void cFodder::Squad_Walk_Target_SetAll(int16 pValue) {
 
     for (unsigned int x = 0; x < 10; ++x) {
@@ -89,7 +98,7 @@ void cFodder::Squad_Set_CurrentVehicle() {
 
 void cFodder::Squad_EnteredVehicle_TimerTick() {
 
-    for (int16 Data0 = 0; Data0 < 3; ++Data0) {
+    for (int16 Data0 = 0; Data0 < NETWORK_MAX_SQUADS; ++Data0) {
         if (!mSquad_EnteredVehicleTimer[Data0])
             continue;
 
@@ -111,7 +120,7 @@ void cFodder::Squad_EnteredVehicle_TimerTick() {
 
 void cFodder::Squad_Walk_Steps_Decrease() {
 
-    for (int16 Data0 = 2; Data0 >= 0; --Data0) {
+    for (int16 Data0 = NETWORK_MAX_SQUADS - 1; Data0 >= 0; --Data0) {
 
         if (mSquad_Walk_Target_Steps[Data0])
             --mSquad_Walk_Target_Steps[Data0];
@@ -123,7 +132,7 @@ void cFodder::Squad_Walk_Target_Set(int16 pTargetX, int16 pTargetY, int16 pSquad
     int16 Data1C;
     sSprite** Saved_Data24 = 0;
 
-    if (pSquadNumber < 0 || pSquadNumber >= 3)
+    if (pSquadNumber < 0 || pSquadNumber >= NETWORK_MAX_SQUADS)
         return;
 
     pData10 = mSquad_Walk_Target_Indexes[pSquadNumber];
@@ -247,6 +256,9 @@ int16 cFodder::Squad_Members_Find_In_Region(sSprite* pSprite, int16 pData8, int1
         if (Troop.mSprite->mHeight >= 0x0B)
             continue;
 
+        if (!Sprite_CanDamageTarget(pSprite, Troop.mSprite))
+            continue;
+
         if (!word_3AA45)
             goto loc_2AD3D;
 
@@ -295,6 +307,8 @@ int16 cFodder::Squad_Members_Find_In_Region(sSprite* pSprite, int16 pData8, int1
         Troop.mSprite->mDirection &= 0x1FE;
 
     loc_2ADC3:; // Hit
+        Sprite_RecordDamage(pSprite, Troop.mSprite);
+
         if (Troop.mSprite->mSpriteType)
             goto loc_2ADFF;
 
@@ -316,19 +330,21 @@ int16 cFodder::Squad_Members_Find_In_Region(sSprite* pSprite, int16 pData8, int1
 
 void cFodder::Squad_Rebuild() {
     sSprite** Data34 = mSprite_TroopsAlive;
+    int16 MaxSquads = 3;
+#ifdef OPENFODDER_ENABLE_NETWORK
+    const bool NetworkMode = mStartParams && mStartParams->mNetworkEnabled;
+    if (NetworkMode)
+        MaxSquads = NETWORK_MAX_SQUADS;
+#endif
 
-    mSquads_TroopCount[0] = 0;
-    mSquads_TroopCount[1] = 0;
-    mSquads_TroopCount[2] = 0;
-    mSquads_TroopCount[3] = 0;
+    memset(mSquads_TroopCount, 0, sizeof(mSquads_TroopCount));
 
     int16 TotalTroops = 0;
 
-    mSquad_0_Sprites[0] = INVALID_SPRITE_PTR;
-    mSquad_1_Sprites[0] = INVALID_SPRITE_PTR;
-    mSquad_2_Sprites[0] = INVALID_SPRITE_PTR;
-    mSquad_3_Sprites[0] = INVALID_SPRITE_PTR;
-    mSquad_4_Sprites[0] = INVALID_SPRITE_PTR;
+    for (int16 Squad = 0; Squad < NETWORK_MAX_SQUADS; ++Squad) {
+        if (mSquads[Squad])
+            mSquads[Squad][0] = INVALID_SPRITE_PTR;
+    }
 
     // Loop through all mission troops
     for( auto& Troop : mGame_Data.mSoldiers_Allocated ) {
@@ -357,6 +373,9 @@ void cFodder::Squad_Rebuild() {
         if (Sprite->field_32 < 0)
             continue;
 
+        if (Sprite->field_32 >= MaxSquads)
+            continue;
+
         uint8 Data10 = mSquads_TroopCount[Sprite->field_32] & 0xFF;
         mSquads_TroopCount[Sprite->field_32] += 1;
         ++TotalTroops;
@@ -374,7 +393,7 @@ void cFodder::Squad_Rebuild() {
     if (!TotalTroops)
         mPhase_TryAgain = true;
 
-    for (int16 Data0 = 2; Data0 >= 0; --Data0) {
+    for (int16 Data0 = MaxSquads - 1; Data0 >= 0; --Data0) {
         if (mSquads_TroopCount[Data0])
             continue;
 
@@ -454,6 +473,9 @@ void cFodder::Squad_Member_CanFire() {
 
     // Can the squad member use their weapon
     Data20 = mSquads[mSquad_Selected][Data4];
+    if (Data20->mInVehicle)
+        return;
+
     if (Data20->mActionCooldown)
         return;
 
@@ -500,14 +522,37 @@ void cFodder::Squad_Prepare_Explosives() {
 }
 
 int16 cFodder::Squad_Join(sSprite* pSprite) {
+    if (!IsPlayerSquadTroop(pSprite))
+        return -1;
+
     int16 Data14 = pSprite->field_32;
     int16 Data0;
 
     int16 Data18 = mSquad_Join_TargetSquad[Data14];
-    if (Data18 < 0)
+    if (Data18 < 0 || Data18 >= NETWORK_MAX_SQUADS)
         return -1;
 
     Data18 &= 0xFF;
+
+#ifdef OPENFODDER_ENABLE_NETWORK
+    if (mStartParams && mStartParams->mNetworkEnabled &&
+        Network_IsPvPMode(mStartParams->mNetworkGameMode) &&
+        !Network_IsAvatarMode(mStartParams->mNetworkGameMode)) {
+        if (Data14 < 0 || Data14 >= NETWORK_MAX_SQUADS ||
+            Data18 < 0 || Data18 >= NETWORK_MAX_SQUADS) {
+            return -1;
+        }
+
+        const int16 SourceOwner = mNetSquadOwner[Data14];
+        const int16 TargetOwner = mNetSquadOwner[Data18];
+        if (SourceOwner < 0 ||
+            SourceOwner >= NETWORK_MAX_PLAYERS ||
+            SourceOwner != TargetOwner) {
+            mSquad_Join_TargetSquad[Data14] = -1;
+            return -1;
+        }
+    }
+#endif
 
     if (mSquads_TroopCount[Data14] > 8)
         return -1;
@@ -547,13 +592,21 @@ int16 cFodder::Squad_Join(sSprite* pSprite) {
 }
 
 int16 cFodder::Squad_Join_Check(sSprite* pSprite) {
+    if (!IsPlayerSquadTroop(pSprite))
+        return -1;
 
-    if (mSquad_Join_TargetSquad[pSprite->field_32] < 0)
+    const int16 targetSquad = mSquad_Join_TargetSquad[pSprite->field_32];
+    if (targetSquad < 0 || targetSquad >= NETWORK_MAX_SQUADS)
         return -1;
 
     sSprite* Dataa2C = mSquad_Join_TargetSprite[pSprite->field_32];
-    if (Dataa2C->mSpriteType != eSprite_Player)
+    if (!IsPlayerSquadTroop(Dataa2C) || mSquad_Selected < 0 || mSquad_Selected >= NETWORK_MAX_SQUADS)
         return -1;
+
+    if (Sprite_AreHostile(pSprite, Dataa2C)) {
+        mSquad_Join_TargetSquad[pSprite->field_32] = -1;
+        return -1;
+    }
 
     sSprite** Data30 = mSquads[mSquad_Selected];
     int16 MaxDistance = 0;
@@ -643,6 +696,43 @@ void cFodder::Squad_Select_Rockets() {
     mSquad_CurrentWeapon[mSquad_Selected] = eWeapon_Rocket;
     mGUI_RefreshSquadRockets[mSquad_Selected] = -1;
     mGUI_RefreshSquadGrenades[mSquad_Selected] = -1;
+}
+
+bool cFodder::Squad_HasSelectedSpecialWeapon(int16 pSquad) const {
+    if (pSquad < 0 || pSquad >= NETWORK_MAX_SQUADS)
+        return false;
+
+    switch (mSquad_CurrentWeapon[pSquad]) {
+    case eWeapon_Grenade:
+        return mSquad_Grenades[pSquad] > 0;
+
+    case eWeapon_Rocket:
+        return mSquad_Rockets[pSquad] > 0;
+
+    default:
+        return false;
+    }
+}
+
+void cFodder::Squad_Select_CollectedWeaponIfNeeded(int16 pSquad, eWeaponSelected pWeapon) {
+    if (pSquad < 0 || pSquad >= NETWORK_MAX_SQUADS)
+        return;
+
+    if (Squad_HasSelectedSpecialWeapon(pSquad))
+        return;
+
+    if (pWeapon == eWeapon_Grenade && mSquad_Grenades[pSquad] <= 0)
+        return;
+
+    if (pWeapon == eWeapon_Rocket && mSquad_Rockets[pSquad] <= 0)
+        return;
+
+    if (pWeapon != eWeapon_Grenade && pWeapon != eWeapon_Rocket)
+        return;
+
+    mSquad_CurrentWeapon[pSquad] = pWeapon;
+    mGUI_RefreshSquadGrenades[pSquad] = -1;
+    mGUI_RefreshSquadRockets[pSquad] = -1;
 }
 
 void cFodder::Squad_Split_Assets() {
@@ -736,6 +826,36 @@ void cFodder::Squad_Member_Click_Check() {
         if (mSquads_TroopCount[SquadMemberSprite->field_32] + mSquads_TroopCount[mSquad_Selected] > 8)
             return;
 
+#ifdef OPENFODDER_ENABLE_NETWORK
+        if (mStartParams && mStartParams->mNetworkEnabled &&
+            Network_IsPvPMode(mStartParams->mNetworkGameMode) &&
+            !Network_IsAvatarMode(mStartParams->mNetworkGameMode)) {
+            if (mSquad_Selected < 0 ||
+                mSquad_Selected >= NETWORK_MAX_SQUADS ||
+                SquadMemberSprite->field_32 < 0 ||
+                SquadMemberSprite->field_32 >= NETWORK_MAX_SQUADS) {
+                return;
+            }
+
+            const int16 SelectedOwner = mNetSquadOwner[mSquad_Selected];
+            const int16 ClickedOwner = mNetSquadOwner[SquadMemberSprite->field_32];
+            if (SelectedOwner < 0 ||
+                SelectedOwner >= NETWORK_MAX_PLAYERS ||
+                SelectedOwner != ClickedOwner) {
+                return;
+            }
+        }
+#endif
+
+        sSprite* SelectedLeader = mSquad_Leader;
+        if (!Sprite_IsActiveSpritePointer(SelectedLeader))
+            SelectedLeader = mSquads[mSquad_Selected][0];
+        if (!Sprite_IsActiveSpritePointer(SelectedLeader))
+            SelectedLeader = 0;
+
+        if (Sprite_AreHostile(SelectedLeader, SquadMemberSprite))
+            return;
+
         mSquad_Join_TargetSprite[mSquad_Selected] = SquadMemberSprite;
         mSquad_Join_TargetSquad[mSquad_Selected] = (int8)SquadMemberSprite->field_32;
 
@@ -763,7 +883,7 @@ void cFodder::Squad_Switch_Weapon() {
 void cFodder::Squad_Member_Target_Set() {
     sSprite** Data20 = 0;
 
-    if (mSquad_CurrentVehicle) {
+    if (Vehicle_GetSelectedSquadVehicle()) {
         Vehicle_Target_Set();
         return;
     }

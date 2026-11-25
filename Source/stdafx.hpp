@@ -19,6 +19,7 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  *
  */
+#define NOMINMAX 
 
 #include <iostream>
 #include <string>
@@ -46,7 +47,7 @@
 
 #include "Types.hpp"
 
-typedef std::shared_ptr<std::vector<uint8>> tSharedBuffer;
+#include "SharedBuffer.hpp"
 
 enum eDataType {
 	eData = 0,
@@ -105,6 +106,7 @@ inline void writeLEWord( const void *buffer, uint16 pValue ) {
 
 #include "Debugger.hpp"
 #include "Utils/pseudorand.hpp"
+#include "Utils/maprand32.hpp"
 
 #include "Position.hpp"
 #include "Dimension.hpp"
@@ -145,11 +147,10 @@ inline void writeLEWord( const void *buffer, uint16 pValue ) {
 #include "Structures/Barracks.hpp"
 
 #include "PC/Graphics_PC.hpp"
+#include "Sound_Null.hpp"
 #ifndef OPENFODDER_NO_MIXER
 #include "PC/Sound_PC.hpp"
 #include "PC/Sound_PC2.hpp"
-#else
-#include "Sound_Null.hpp"
 #endif
 
 #include "Amiga/paula.hpp"
@@ -159,7 +160,14 @@ inline void writeLEWord( const void *buffer, uint16 pValue ) {
 #include "Amiga/Graphics_Amiga2.hpp"
 
 #include "About.hpp"
+#include "KeyboardShortcuts.hpp"
 #include "UnitTesting.hpp"
+
+#include "Network/NetworkLobby.hpp"
+#include "Network/NetworkDiscovery.hpp"
+#include "Network/NetworkHubClient.hpp"
+#include "Network/MultiplayerMenu.hpp"
+#include "Network/FodderMultiplayer.hpp"
 
 #include "ScriptingEngine.hpp"
 

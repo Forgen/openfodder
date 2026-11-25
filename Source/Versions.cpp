@@ -86,36 +86,41 @@ const std::vector<eGFX_Types> PCFormat_GFX_Types = {
 /**
  * Known versions of Cannon Fodder
  */
+// Constructor signature: name, game, platform, release, dataPath, shortName, files
+//
+// Short names: ≤12 chars, all-caps, used in the wizard and any "now playing"
+// UI. They MUST be distinct so ePathKind/ResourceMan diagnostics can refer
+// to a release unambiguously.
 const sGameVersion KnownGameVersions[] = {
 
 	/* Retail */
-	{ "Cannon Fodder",					eGame::CF1, ePlatform::Amiga,	eRelease::Retail,	"Amiga",	mAmigaFiles },
-	{ "Cannon Fodder",					eGame::CF1, ePlatform::Amiga,	eRelease::Retail,	"Amiga_CD",	mAmigaCD32Files },
-	{ "Cannon Fodder",					eGame::CF1, ePlatform::PC,		eRelease::Retail,	"Dos_CD",	mPCFiles },
-	{ "Cannon Fodder 2",				eGame::CF2, ePlatform::Amiga,	eRelease::Retail,	"Amiga2",	mAmiga2Files },
-	{ "Cannon Fodder 2",				eGame::CF2, ePlatform::PC,		eRelease::Retail,	"Dos2_CD",	mPC2Files },
+	{ "Cannon Fodder",					eGame::CF1, ePlatform::Amiga,	eRelease::Retail,	"Amiga",	"CF1 AMIGA",	mAmigaFiles },
+	{ "Cannon Fodder",					eGame::CF1, ePlatform::Amiga,	eRelease::Retail,	"Amiga_CD",	"CF1 CD32",	mAmigaCD32Files },
+	{ "Cannon Fodder",					eGame::CF1, ePlatform::PC,		eRelease::Retail,	"Dos_CD",	"CF1 DOS",	mPCFiles },
+	{ "Cannon Fodder 2",				eGame::CF2, ePlatform::Amiga,	eRelease::Retail,	"Amiga2",	"CF2 AMIGA",	mAmiga2Files },
+	{ "Cannon Fodder 2",				eGame::CF2, ePlatform::PC,		eRelease::Retail,	"Dos2_CD",	"CF2 DOS",	mPC2Files },
 
 	/* Amiga Magazine Demos */
-	{ "Cannon Fodder Plus",				eGame::CF1, ePlatform::Amiga,	eRelease::AmigaPower,		    "Plus",				mPlusFiles },
-	{ "Amiga The One",                  eGame::CF1, ePlatform::Amiga,   eRelease::AmigaTheOne,          "AmigaTheOne",      mAmigaTheOneFiles },
-	{ "Amiga Action",                   eGame::CF1, ePlatform::Amiga,   eRelease::AmigaAction,          "AmigaAction",      mAmigaActionFiles },
-	{ "Amiga Power Alien Levels",		eGame::CF2, ePlatform::Amiga,	eRelease::AmigaAlienLevels,		"AmigaAlienLevels", mAmigaAlienLevels },
-	{ "Amiga Format Christmas Special", eGame::CF1, ePlatform::Amiga,	eRelease::AmigaXMAS,		    "AmigaFormat_XMAS", mAmigaFormatFiles },
-	{ "Amiga Format Not Very Festive",  eGame::CF2, ePlatform::Amiga,   eRelease::AmigaNotVeryFestive,  "AmigaFormat_NVF",  mAmigaFormat_NotVeryFestiveFiles },
+	{ "Cannon Fodder Plus",				eGame::CF1, ePlatform::Amiga,	eRelease::AmigaPower,		    "Plus",				"AP+ DEMO",	mPlusFiles },
+	{ "Amiga The One",                  eGame::CF1, ePlatform::Amiga,   eRelease::AmigaTheOne,          "AmigaTheOne",      "ONE DEMO",	mAmigaTheOneFiles },
+	{ "Amiga Action",                   eGame::CF1, ePlatform::Amiga,   eRelease::AmigaAction,          "AmigaAction",      "AA DEMO",	mAmigaActionFiles },
+	{ "Amiga Power Alien Levels",		eGame::CF2, ePlatform::Amiga,	eRelease::AmigaAlienLevels,		"AmigaAlienLevels",	"AP ALIEN",	mAmigaAlienLevels },
+	{ "Amiga Format Christmas Special", eGame::CF1, ePlatform::Amiga,	eRelease::AmigaXMAS,		    "AmigaFormat_XMAS",	"AF XMAS",	mAmigaFormatFiles },
+	{ "Amiga Format Not Very Festive",  eGame::CF2, ePlatform::Amiga,   eRelease::AmigaNotVeryFestive,  "AmigaFormat_NVF",	"AF NVF",	mAmigaFormat_NotVeryFestiveFiles },
 
 	/* PC Demos */
-	{ "PC Format",                      eGame::CF1, ePlatform::PC,      eRelease::PCFormat, "PCFormat", mPCFormatFiles },
+	{ "PC Format",                      eGame::CF1, ePlatform::PC,      eRelease::PCFormat, "PCFormat",	"PCFORMAT",	mPCFormatFiles },
 
 	/* Custom & Random must be last, as they depend on a previous retail version being detected first */
-	{ "Single Map", eGame::CF1, ePlatform::Amiga,   eRelease::Custom,	"Custom", { } },
-	{ "Single Map", eGame::CF1, ePlatform::PC,      eRelease::Custom,	"Custom", { } },
-	{ "Single Map", eGame::CF2, ePlatform::Amiga,   eRelease::Custom,	"Custom", { } },
-	{ "Single Map", eGame::CF2, ePlatform::PC,      eRelease::Custom,	"Custom", { } },
+	{ "Single Map", eGame::CF1, ePlatform::Amiga,   eRelease::Custom,	"Custom",	"SINGLE",	{ } },
+	{ "Single Map", eGame::CF1, ePlatform::PC,      eRelease::Custom,	"Custom",	"SINGLE",	{ } },
+	{ "Single Map", eGame::CF2, ePlatform::Amiga,   eRelease::Custom,	"Custom",	"SINGLE",	{ } },
+	{ "Single Map", eGame::CF2, ePlatform::PC,      eRelease::Custom,	"Custom",	"SINGLE",	{ } },
 
-	{ "Random Map", eGame::CF1, ePlatform::Amiga,   eRelease::eRandom,	"Custom", { } },
-	{ "Random Map", eGame::CF1, ePlatform::PC,      eRelease::eRandom,	"Custom", { } },
-	{ "Random Map", eGame::CF2, ePlatform::Amiga,   eRelease::eRandom,	"Custom", { } },
-	{ "Random Map", eGame::CF2, ePlatform::PC,      eRelease::eRandom,	"Custom", { } },
+	{ "Random Map", eGame::CF1, ePlatform::Amiga,   eRelease::eRandom,	"Custom",	"RANDOM",	{ } },
+	{ "Random Map", eGame::CF1, ePlatform::PC,      eRelease::eRandom,	"Custom",	"RANDOM",	{ } },
+	{ "Random Map", eGame::CF2, ePlatform::Amiga,   eRelease::eRandom,	"Custom",	"RANDOM",	{ } },
+	{ "Random Map", eGame::CF2, ePlatform::PC,      eRelease::eRandom,	"Custom",	"RANDOM",	{ } },
 
 };
 
@@ -139,6 +144,55 @@ const sGameVersion* cVersions::GetRetail(const ePlatform pPlatform, const eGame 
     }
 
     return *RetailRelease;
+}
+
+bool cVersions::AnyRetailAvailable() const {
+    auto Available = g_ResourceMan->GetAvailable();
+    for (auto* v : Available) {
+        if (v->mRelease == eRelease::Retail)
+            return true;
+    }
+    return false;
+}
+
+bool cVersions::AnyRetailAvailable(const eGame pGame) const {
+    auto Available = g_ResourceMan->GetAvailable();
+    for (auto* v : Available) {
+        if (v->mRelease == eRelease::Retail && v->mGame == pGame)
+            return true;
+    }
+    return false;
+}
+
+const sGameVersion* cVersions::GetVersionForMenuChrome() const {
+    auto Available = g_ResourceMan->GetAvailable();
+    if (Available.empty())
+        return nullptr;
+
+    auto hasBriefing = [](const sGameVersion* v) {
+        if (!v) return false;
+        auto gfx = v->getGfxTypes();
+        const bool brief = std::find(gfx.begin(), gfx.end(), eGFX_BRIEFING) != gfx.end();
+        const bool font  = std::find(gfx.begin(), gfx.end(), eGFX_FONT)     != gfx.end();
+        return brief && font;
+    };
+
+    // 1) Any retail (best fidelity).
+    for (auto* v : Available)
+        if (v->mRelease == eRelease::Retail && hasBriefing(v))
+            return v;
+
+    // 2) PCFormat — ships in the repo and has the full PC briefing sheet.
+    for (auto* v : Available)
+        if (v->mRelease == eRelease::PCFormat && hasBriefing(v))
+            return v;
+
+    // 3) Any other release that happens to carry briefing data.
+    for (auto* v : Available)
+        if (hasBriefing(v))
+            return v;
+
+    return nullptr;
 }
 
 const sGameVersion* cVersions::GetDemo() const {
@@ -279,10 +333,6 @@ bool sGameVersion::CanUseAmigaSound() const {
 }
 
 std::shared_ptr<cSound> sGameVersion::GetSound() const {
-
-#ifdef OPENFODDER_NO_MIXER
-	return std::make_shared<cSound_Null>();
-#endif
 
 	// Check for JON.INS in the game data folder, this allows replacing PC audio with Amiga for both CF1 and CF2
 	if (CanUseAmigaSound())

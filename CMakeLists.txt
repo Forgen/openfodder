@@ -1,19 +1,35 @@
-cmake_minimum_required(VERSION 3.10.0)
+cmake_minimum_required(VERSION 3.18.0)
 
 if (POLICY CMP0025)
   cmake_policy(SET CMP0025 NEW)
 endif ()
+
+if (POLICY CMP0091)
+  cmake_policy(SET CMP0091 NEW)
+endif ()
+
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 
 if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     message(STATUS "No build type selected, default to Release.")
     set(CMAKE_BUILD_TYPE "Release")
 endif()
 
-project(openfodder VERSION 1.5.4 LANGUAGES CXX)
-
-set(CMAKE_CXX_STANDARD 14)
+# FFmpeg is the only MPEG video decoder. Builds without it omit MPEG playback.
 option(OPENFODDER_ENABLE_FFMPEG "Enable FFmpeg intro video playback" OFF)
+# vcpkg resolves manifest features during project(), before dependency discovery.
+list(REMOVE_ITEM VCPKG_MANIFEST_FEATURES ffmpeg)
+if(OPENFODDER_ENABLE_FFMPEG)
+    list(APPEND VCPKG_MANIFEST_FEATURES ffmpeg)
+endif()
+
+project(openfodder VERSION 1.5.4 LANGUAGES C CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 option(OPENFODDER_AUTO_FFMPEG "Auto-enable FFmpeg when found (non-Windows)" ON)
+option(OPENFODDER_ENABLE_NETWORK "Enable GGPO rollback networking for cooperative multiplayer" ON)
 
 if(MSVC)
     # Enable Hot Reload (Edit and Continue) for Debug builds.
@@ -24,59 +40,55 @@ endif()
 
 if(EMSCRIPTEN)
     set(OPENFODDER_EMSCRIPTEN ON)
+    include(cmake/WebAudio.cmake)
 else()
     find_package(Threads REQUIRED)
 endif()
 
+if(NOT EMSCRIPTEN)
+    include(FetchContent)
+    find_package(SDL3 3.4 CONFIG REQUIRED)
+    find_package(SDL3_mixer 3.2 CONFIG REQUIRED)
+endif()
+
 if(EMSCRIPTEN)
 elseif(WIN32)
-    include(FetchContent)
+    # The vcpkg mixer loads libxmp dynamically; deploy it explicitly below.
+    find_package(libxmp CONFIG REQUIRED)
 
-    set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
-    set(SDL_SHARED ON CACHE BOOL "" FORCE)
-    set(SDL_STATIC OFF CACHE BOOL "" FORCE)
-    set(SDL_TESTS OFF CACHE BOOL "" FORCE)
+    # libcurl — used by the setup wizard / updater for HTTPS downloads of
+    # retail-data manifests, scripts, and engine update archives. On Windows
+    # we vendor it via FetchContent and pin TLS to Schannel so we don't
+    # have to ship an OpenSSL CA bundle. HTTP_ONLY plus the per-protocol
+    # disables strip out everything we don't need (LDAP, SMTP, etc.).
+    set(BUILD_CURL_EXE OFF CACHE BOOL "" FORCE)
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+    set(CURL_USE_LIBPSL OFF CACHE BOOL "" FORCE)
+    set(CURL_USE_SCHANNEL ON CACHE BOOL "" FORCE)
+    set(CURL_USE_OPENSSL OFF CACHE BOOL "" FORCE)
+    set(CURL_DISABLE_LDAP ON CACHE BOOL "" FORCE)
+    set(CURL_DISABLE_LDAPS ON CACHE BOOL "" FORCE)
+    set(CURL_DISABLE_TELNET ON CACHE BOOL "" FORCE)
+    set(CURL_DISABLE_DICT ON CACHE BOOL "" FORCE)
+    set(CURL_DISABLE_FILE ON CACHE BOOL "" FORCE)
+    set(CURL_DISABLE_TFTP ON CACHE BOOL "" FORCE)
+    set(CURL_DISABLE_RTSP ON CACHE BOOL "" FORCE)
+    set(CURL_DISABLE_POP3 ON CACHE BOOL "" FORCE)
+    set(CURL_DISABLE_IMAP ON CACHE BOOL "" FORCE)
+    set(CURL_DISABLE_SMTP ON CACHE BOOL "" FORCE)
+    set(CURL_DISABLE_GOPHER ON CACHE BOOL "" FORCE)
+    set(CURL_DISABLE_MQTT ON CACHE BOOL "" FORCE)
+    set(HTTP_ONLY ON CACHE BOOL "" FORCE)
 
-    set(SDLMIXER_VENDORED ON CACHE BOOL "" FORCE)
-    set(SDLMIXER_MOD_XMP ON CACHE BOOL "" FORCE)
-    set(SDLMIXER_MOD_XMP_LITE ON CACHE BOOL "" FORCE)
-    set(SDLMIXER_MOD_XMP_SHARED OFF CACHE BOOL "" FORCE)
-    set(SDLMIXER_TESTS OFF CACHE BOOL "" FORCE)
-    set(SDLMIXER_INSTALL OFF CACHE BOOL "" FORCE)
-
-    set(SDL3_GIT_TAG "release-3.4.0")
-    set(SDL3_MIXER_GIT_TAG "3045b35335113e5e5ba258858cb403d8803bfbeb")
-
-    FetchContent_Declare(
-        SDL3
-        GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
-        GIT_TAG ${SDL3_GIT_TAG}
-        GIT_SHALLOW FALSE
-    )
-
-    FetchContent_Declare(
-        SDL3_mixer
-        GIT_REPOSITORY https://github.com/libsdl-org/SDL_mixer.git
-        GIT_TAG ${SDL3_MIXER_GIT_TAG}
-        GIT_SHALLOW FALSE
-    )
-
-    FetchContent_MakeAvailable(SDL3)
-    FetchContent_MakeAvailable(SDL3_mixer)
-
-    set(_sdl_mixer_compat_header "${CMAKE_CURRENT_LIST_DIR}/cmake/sdl3_mixer_compat.h")
-    foreach(_sdl_mixer_target IN ITEMS SDL3_mixer SDL3_mixer-shared SDL3_mixer-static)
-        if(TARGET ${_sdl_mixer_target})
-            if(MSVC)
-                target_compile_options(${_sdl_mixer_target} PRIVATE "/FI${_sdl_mixer_compat_header}")
-            else()
-                target_compile_options(${_sdl_mixer_target} PRIVATE "-include" "${_sdl_mixer_compat_header}")
-            endif()
-        endif()
-    endforeach()
+    set(LIBCURL_GIT_TAG "curl-8_5_0")
+    FetchContent_Declare(libcurl
+        GIT_REPOSITORY https://github.com/curl/curl.git
+        GIT_TAG ${LIBCURL_GIT_TAG}
+        GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(libcurl)
 else()
-    find_package(SDL3 CONFIG REQUIRED)
-    find_package(SDL3_mixer CONFIG REQUIRED)
+    find_package(CURL REQUIRED)
 endif()
 
 # Locate git binary to provide information to the build environment
@@ -98,18 +110,44 @@ endif()
 
 configure_file(cmake/gitver.hpp.in Source/gitver.hpp @ONLY)
 
-file(GLOB_RECURSE GAMEENGINE_HEADERS "Source/*.hpp")
-file(GLOB_RECURSE GAMEENGINE_SOURCE "Source/*.cpp")
+file(GLOB_RECURSE GAMEENGINE_HEADERS CONFIGURE_DEPENDS "Source/*.hpp" "Source/*.h")
+file(GLOB_RECURSE GAMEENGINE_SOURCE CONFIGURE_DEPENDS "Source/*.cpp")
+
+# Vendored miniz is C, not C++. miniz.c contains both prototypes and
+# definitions and explodes when the compiler treats it as C++ (the static
+# table arrays end up emitted twice). Compile it as C explicitly.
+list(APPEND GAMEENGINE_SOURCE "${CMAKE_SOURCE_DIR}/Source/Utils/miniz.c")
 
 source_group(TREE "${CMAKE_SOURCE_DIR}/Source" FILES ${GAMEENGINE_HEADERS} ${GAMEENGINE_SOURCE})
 
 if(EMSCRIPTEN)
-    list(FILTER GAMEENGINE_SOURCE EXCLUDE REGEX "Source/PC/Sound_PC2.cpp$")
-    list(FILTER GAMEENGINE_SOURCE EXCLUDE REGEX "Source/PC/Sound_PC.cpp$")
-    list(FILTER GAMEENGINE_SOURCE EXCLUDE REGEX "Source/Start.cpp$")
+    # The browser entry point schedules the shared game flow with Asyncify;
+    # only native setup/updating is excluded.
+    list(FILTER GAMEENGINE_SOURCE EXCLUDE REGEX "Source/Setup/(ColdStart|SetupWizard|UpdateChecker).cpp$")
+endif()
+
+# segrax/firy — disk-image filesystem library (ADF/D64/FAT, soon ISO9660).
+# Pulled in as a git submodule under library/firy/. The setup wizard mounts
+# user-supplied disk images via firy at runtime instead of extracting them.
+# Skip on Emscripten — the setup wizard isn't part of the web build.
+if(NOT EMSCRIPTEN AND EXISTS "${CMAKE_SOURCE_DIR}/library/firy/CMakeLists.txt")
+    include(cmake/Firy.cmake)
+    set(OPENFODDER_HAS_FIRY TRUE)
+else()
+    set(OPENFODDER_HAS_FIRY FALSE)
 endif()
 
 add_executable(openfodder ${GAMEENGINE_SOURCE} ${GAMEENGINE_HEADERS})
+
+option(OPENFODDER_ENABLE_CAPSIMAGE "Build the native SOS SDK for IPF/CT RAW disks" ON)
+if(OPENFODDER_ENABLE_CAPSIMAGE AND NOT EMSCRIPTEN)
+    include(cmake/CapsImage.cmake)
+endif()
+
+if(OPENFODDER_HAS_FIRY)
+    target_link_libraries(openfodder PRIVATE firy)
+    target_compile_definitions(openfodder PRIVATE OPENFODDER_HAS_FIRY=1)
+endif()
 
 if(WIN32)
     target_sources(openfodder PRIVATE
@@ -118,12 +156,15 @@ if(WIN32)
 endif()
 
 if(MSVC)
+    if(NOT CMAKE_RUNTIME_OUTPUT_DIRECTORY)
+        set_target_properties(openfodder PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/Run/$<CONFIG>")
+    endif()
     set_target_properties(openfodder PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/Run"
-        RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_SOURCE_DIR}/Run"
-        RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_SOURCE_DIR}/Run"
-        RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_SOURCE_DIR}/Run"
-        RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${CMAKE_SOURCE_DIR}/Run")
+        # A machine-wide `vcpkg integrate install` otherwise appends every
+        # classic-mode library (including an installed SDL2.lib) to the link.
+        # Dependencies in this project are linked explicitly by CMake.
+        VS_GLOBAL_VcpkgAutoLink false)
     set_target_properties(openfodder PROPERTIES
         VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/Run")
     set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT openfodder)
@@ -138,54 +179,256 @@ target_compile_definitions(openfodder PRIVATE
     _UNICODE
     _USE_MATH_DEFINES)
 
-if (OPENFODDER_ENABLE_FFMPEG OR (OPENFODDER_AUTO_FFMPEG AND NOT WIN32))
+if(OPENFODDER_ENABLE_NETWORK AND NOT EMSCRIPTEN)
+    # Clone GGPO directly via git during configure so the source is
+    # immediately available for add_library (avoids FetchContent subbuild
+    # issues with CMake 4.x and GGPO's outdated CMakeLists.txt).
+    set(GGPO_SOURCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/ggpo-src")
+    find_package(Git REQUIRED)
+
+    # Use .git presence as the reliable "fully cloned" marker.
+    # If it's missing (never cloned or partial), wipe and re-clone.
+    if(NOT EXISTS "${GGPO_SOURCE_DIR}/.git")
+        file(REMOVE_RECURSE "${GGPO_SOURCE_DIR}")
+        message(STATUS "[GGPO] Cloning pond3r/ggpo...")
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" clone --depth 1
+                    "https://github.com/pond3r/ggpo.git"
+                    "${GGPO_SOURCE_DIR}"
+            RESULT_VARIABLE _ggpo_result
+            ERROR_VARIABLE  _ggpo_error
+        )
+        if(_ggpo_result)
+            message(FATAL_ERROR "Failed to clone GGPO (${_ggpo_result}): ${_ggpo_error}")
+        endif()
+    endif()
+
+    if(NOT WIN32)
+        set(GGPO_LINUX_PATCH "${CMAKE_CURRENT_LIST_DIR}/cmake/ggpo-linux-compat.patch")
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" -C "${GGPO_SOURCE_DIR}" apply --check "${GGPO_LINUX_PATCH}"
+            RESULT_VARIABLE _ggpo_patch_check
+            ERROR_VARIABLE _ggpo_patch_error
+        )
+        if(_ggpo_patch_check EQUAL 0)
+            message(STATUS "[GGPO] Applying Linux compatibility patch...")
+            execute_process(
+                COMMAND "${GIT_EXECUTABLE}" -C "${GGPO_SOURCE_DIR}" apply "${GGPO_LINUX_PATCH}"
+                RESULT_VARIABLE _ggpo_patch_result
+                ERROR_VARIABLE _ggpo_patch_apply_error
+            )
+            if(_ggpo_patch_result)
+                message(FATAL_ERROR "Failed to apply GGPO Linux compatibility patch: ${_ggpo_patch_apply_error}")
+            endif()
+        else()
+            execute_process(
+                COMMAND "${GIT_EXECUTABLE}" -C "${GGPO_SOURCE_DIR}" apply --reverse --check "${GGPO_LINUX_PATCH}"
+                RESULT_VARIABLE _ggpo_patch_reverse_check
+                ERROR_QUIET
+            )
+            if(NOT _ggpo_patch_reverse_check EQUAL 0)
+                file(READ "${GGPO_SOURCE_DIR}/src/include/ggponet.h" _ggpo_net_header)
+                file(READ "${GGPO_SOURCE_DIR}/src/lib/ggpo/platform_linux.h" _ggpo_linux_header)
+                if(_ggpo_net_header MATCHES "__cdecl" AND
+                   _ggpo_linux_header MATCHES "WSAGetLastError" AND
+                   _ggpo_linux_header MATCHES "CreateDirectoryA")
+                    message(STATUS "[GGPO] Linux compatibility patch appears to be already applied.")
+                else()
+                    message(FATAL_ERROR "GGPO Linux compatibility patch no longer applies: ${_ggpo_patch_error}")
+                endif()
+            endif()
+        endif()
+    endif()
+
+    # OFHUB/2 wrap/unwrap hooks on the upstream Udp class. Unconditional:
+    # the hooks are platform-agnostic (typedefs + three pointer members +
+    # one accessor) and stay dormant until openfodder calls
+    # Udp::InstallOfhubHooks at runtime. The data-plane wiring lives in
+    # Source/Network/HubFrame.{cpp,hpp}.
+    set(GGPO_OFHUB2_PATCH "${CMAKE_CURRENT_LIST_DIR}/cmake/ggpo-ofhub2-hooks.patch")
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" -C "${GGPO_SOURCE_DIR}" apply --check "${GGPO_OFHUB2_PATCH}"
+        RESULT_VARIABLE _ggpo_ofhub2_check
+        ERROR_VARIABLE  _ggpo_ofhub2_error
+    )
+    if(_ggpo_ofhub2_check EQUAL 0)
+        message(STATUS "[GGPO] Applying OFHUB/2 wrap/unwrap hooks patch...")
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" -C "${GGPO_SOURCE_DIR}" apply "${GGPO_OFHUB2_PATCH}"
+            RESULT_VARIABLE _ggpo_ofhub2_result
+            ERROR_VARIABLE  _ggpo_ofhub2_apply_error
+        )
+        if(_ggpo_ofhub2_result)
+            message(FATAL_ERROR "Failed to apply GGPO OFHUB/2 hooks patch: ${_ggpo_ofhub2_apply_error}")
+        endif()
+    else()
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" -C "${GGPO_SOURCE_DIR}" apply --reverse --check "${GGPO_OFHUB2_PATCH}"
+            RESULT_VARIABLE _ggpo_ofhub2_reverse_check
+            ERROR_QUIET
+        )
+        if(NOT _ggpo_ofhub2_reverse_check EQUAL 0)
+            file(READ "${GGPO_SOURCE_DIR}/src/lib/ggpo/network/udp.h" _ggpo_udp_header)
+            if(_ggpo_udp_header MATCHES "OfhubWrapFn")
+                message(STATUS "[GGPO] OFHUB/2 hooks patch appears to be already applied.")
+            else()
+                message(FATAL_ERROR "GGPO OFHUB/2 hooks patch no longer applies: ${_ggpo_ofhub2_error}")
+            endif()
+        endif()
+    endif()
+
+    # Auto-discover all GGPO .cpp files (robust to repo layout changes).
+    set(GGPO_SRC_DIR "${GGPO_SOURCE_DIR}/src/lib/ggpo")
+    file(GLOB_RECURSE GGPO_SOURCES "${GGPO_SRC_DIR}/*.cpp")
+    if(WIN32)
+        list(FILTER GGPO_SOURCES EXCLUDE REGEX "platform_linux\\.cpp$")
+    else()
+        list(FILTER GGPO_SOURCES EXCLUDE REGEX "platform_windows\\.cpp$")
+    endif()
+    if(NOT GGPO_SOURCES)
+        message(FATAL_ERROR
+            "No GGPO source files found under ${GGPO_SRC_DIR}.\n"
+            "Delete ${GGPO_SOURCE_DIR} and reconfigure to force a fresh clone.")
+    endif()
+
+    add_library(ggpo_static STATIC ${GGPO_SOURCES})
+    target_include_directories(ggpo_static
+        PUBLIC  "${GGPO_SOURCE_DIR}/src/include"
+        PRIVATE "${GGPO_SRC_DIR}"
+    )
+    if(WIN32)
+        target_link_libraries(ggpo_static PUBLIC ws2_32 winmm)
+    endif()
+    if(MSVC)
+        # Suppress warnings in GGPO that we don't own
+        target_compile_options(ggpo_static PRIVATE /W0)
+    endif()
+
+    target_compile_definitions(openfodder PRIVATE OPENFODDER_ENABLE_NETWORK)
+    target_link_libraries(openfodder PRIVATE ggpo_static)
+    target_include_directories(openfodder PRIVATE "${GGPO_SOURCE_DIR}/src/include")
+
+    # libsodium — primitives for the OFHUB/2 hub client:
+    #   * HMAC-SHA256       stateless cookie + per-session data-plane MAC
+    #   * Ed25519 verify    bearer JWT signature check (we only verify; the
+    #                       hub holds the signing key and mints tokens)
+    #   * randombytes_buf   nonce + device-code generation
+    # Pulled via robinlinden/libsodium-cmake (the wrapper around upstream
+    # jedisct1/libsodium that adds CMake support). Pinned by SHA so a future
+    # upstream HEAD movement cannot silently change crypto behaviour. See
+    # the matching pin in openfodder-hub/CMakeLists.txt — keep them in sync.
+    set(SODIUM_DISABLE_TESTS ON CACHE BOOL "" FORCE)
+    set(SODIUM_MINIMAL OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(Sodium
+        GIT_REPOSITORY https://github.com/robinlinden/libsodium-cmake.git
+        GIT_TAG cfebfd3da486d5a86c644c8b47067e5411c7599c
+        GIT_SHALLOW FALSE)
+    FetchContent_MakeAvailable(Sodium)
+    target_link_libraries(openfodder PRIVATE sodium)
+    target_compile_definitions(openfodder PRIVATE OPENFODDER_HAVE_SODIUM)
+endif()
+
+if (NOT EMSCRIPTEN AND (OPENFODDER_ENABLE_FFMPEG OR (OPENFODDER_AUTO_FFMPEG AND NOT WIN32)))
     list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")
-    find_package(FFmpeg)
+    if(OPENFODDER_ENABLE_FFMPEG)
+        find_package(FFmpeg REQUIRED)
+    else()
+        find_package(FFmpeg QUIET)
+    endif()
     if (FFmpeg_FOUND)
         target_compile_definitions(openfodder PRIVATE OPENFODDER_ENABLE_FFMPEG)
         target_include_directories(openfodder PRIVATE ${FFMPEG_INCLUDE_DIRS})
         target_link_libraries(openfodder PRIVATE ${FFMPEG_LIBRARIES})
-    elseif(OPENFODDER_ENABLE_FFMPEG)
-        message(WARNING "FFmpeg not found; intro video playback disabled.")
     endif()
 endif()
 
+option(OPENFODDER_BUILD_MEDIA_TESTS "Build offline MPEG video/audio decoder checks" OFF)
+option(OPENFODDER_BUILD_SETUP_TESTS "Build native setup checks" OFF)
+option(OPENFODDER_BUILD_DISK_TESTS "Build ADF disk-set checks" OFF)
+option(OPENFODDER_SETUP_DIAGNOSTICS "Enable setup-screen rendering checks" OFF)
+if(OPENFODDER_SETUP_DIAGNOSTICS AND NOT EMSCRIPTEN)
+    set_source_files_properties(Source/Setup/SetupWizard.cpp Source/Setup/SetupWizardPreview.cpp Source/GUI_Element.cpp
+        Source/Network/MultiplayerMenu.cpp Source/Network/FodderMultiplayer.cpp
+        PROPERTIES COMPILE_DEFINITIONS OPENFODDER_SETUP_DIAGNOSTICS=1)
+endif()
+if(OPENFODDER_BUILD_DISK_TESTS AND OPENFODDER_HAS_FIRY)
+    enable_testing()
+    add_subdirectory(Tests/DiskImages)
+endif()
+if(OPENFODDER_BUILD_MEDIA_TESTS)
+    if(NOT FFmpeg_FOUND)
+        message(FATAL_ERROR "Media checks require FFmpeg. Set OPENFODDER_ENABLE_FFMPEG=ON.")
+    endif()
+    enable_testing()
+    add_subdirectory(Tests/VideoMPEG)
+endif()
+if(OPENFODDER_BUILD_SETUP_TESTS AND NOT EMSCRIPTEN)
+    enable_testing()
+    add_subdirectory(Tests/DownloadProgress)
+    add_subdirectory(Tests/SetupFolders)
+endif()
+
 if(EMSCRIPTEN)
-    target_compile_definitions(openfodder PRIVATE EMSCRIPTEN OPENFODDER_NO_MIXER)
-    target_compile_options(openfodder PRIVATE "-sUSE_SDL=3")
+    target_compile_definitions(openfodder PRIVATE EMSCRIPTEN)
+    target_link_libraries(openfodder PRIVATE SDL3::SDL3 SDL3_mixer::SDL3_mixer)
+    option(OPENFODDER_WEB_DIAGNOSTICS "Enable browser integration checks" OFF)
+    if(OPENFODDER_WEB_DIAGNOSTICS)
+        set_source_files_properties(Source/Tools/WebDiagnostics.cpp PROPERTIES
+            COMPILE_DEFINITIONS OPENFODDER_WEB_DIAGNOSTICS)
+        target_link_options(openfodder PRIVATE "-sEXPORTED_RUNTIME_METHODS=UTF8ToString")
+    endif()
+    # C++ exceptions are used by the script engine and resource loaders.
+    target_compile_options(openfodder PRIVATE "-fexceptions")
     set_target_properties(openfodder PROPERTIES
         OUTPUT_NAME "OpenFodder"
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/RunE"
         SUFFIX ".html")
     target_link_options(openfodder PRIVATE
-        "-sUSE_SDL=3"
+        "-fexceptions"
+        "-sASYNCIFY=1"
+        "-sASYNCIFY_STACK_SIZE=131072"
+        "-sSTACK_SIZE=8388608"
         "-sALLOW_MEMORY_GROWTH=1"
         "-sASSERTIONS=1"
-        "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/Run@/")
+        "SHELL:--shell-file \"${CMAKE_SOURCE_DIR}/Projects/emscripten/shell.html\"")
+    include(cmake/WebAssets.cmake)
 else()
     target_link_libraries(openfodder PRIVATE SDL3::SDL3 SDL3_mixer::SDL3_mixer Threads::Threads)
+    if(WIN32)
+        target_link_libraries(openfodder PRIVATE libcurl)
+    else()
+        target_link_libraries(openfodder PRIVATE CURL::libcurl)
+    endif()
 endif()
 
 if(WIN32)
-    set(_runtime_dlls "")
-    if(TARGET SDL3::SDL3)
-        list(APPEND _runtime_dlls $<TARGET_FILE:SDL3::SDL3>)
-    elseif(TARGET SDL3-shared)
-        list(APPEND _runtime_dlls $<TARGET_FILE:SDL3-shared>)
-    endif()
+    # SDL2 has not been a runtime dependency since the SDL3 migration. Remove
+    # stale copies left in an existing output directory so they cannot mask an
+    # accidental SDL2 link or be packaged with a new build.
+    add_custom_command(TARGET openfodder POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E rm -f
+            "$<TARGET_FILE_DIR:openfodder>/SDL2.dll"
+        COMMENT "Remove obsolete SDL2 runtime DLL")
 
-    if(TARGET SDL3_mixer::SDL3_mixer)
-        list(APPEND _runtime_dlls $<TARGET_FILE:SDL3_mixer::SDL3_mixer>)
-    elseif(TARGET SDL3_mixer-shared)
-        list(APPEND _runtime_dlls $<TARGET_FILE:SDL3_mixer-shared>)
-    endif()
+    # vcpkg's app-local deployment also copies linked transitive dependencies
+    # (including FFmpeg when enabled). libxmp uses SDL_LoadObject, so it is not
+    # discoverable from the executable's import table and must be copied here.
+    set(_runtime_dlls "")
+    foreach(_runtime_target IN ITEMS SDL3::SDL3 SDL3_mixer::SDL3_mixer libxmp::xmp_shared)
+        if(TARGET ${_runtime_target})
+            get_target_property(_runtime_type ${_runtime_target} TYPE)
+            if(_runtime_type STREQUAL "SHARED_LIBRARY")
+                list(APPEND _runtime_dlls $<TARGET_FILE:${_runtime_target}>)
+            endif()
+        endif()
+    endforeach()
 
     if(_runtime_dlls)
         add_custom_command(TARGET openfodder POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 ${_runtime_dlls}
-                "${CMAKE_SOURCE_DIR}/Run"
-            COMMENT "Copy SDL runtime DLLs to output directory")
+                "$<TARGET_FILE_DIR:openfodder>"
+            COMMENT "Copy SDL and MOD decoder runtime DLLs to output directory")
     endif()
 
     target_link_libraries(openfodder PRIVATE ws2_32)

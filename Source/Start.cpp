@@ -21,45 +21,86 @@
  */
 
 #include "stdafx.hpp"
+#include "Tools/RouteOracleReplay.hpp"
 #include <thread>
+#ifdef __EMSCRIPTEN__
+#include <emscripten/eventloop.h>
+#endif
 
 #ifndef _OFED
 #ifndef _OFBOT
 
+#ifdef __EMSCRIPTEN__
+int startGame(int argc, char *argv[]) {
+#else
 int start(int argc, char *argv[]) {
+#endif
 	g_Debugger = std::make_shared<cDebugger>();
 	g_Window = std::make_shared<cWindow>();
 	g_ResourceMan = std::make_shared<cResourceMan>();
+#ifdef OPENFODDER_ENABLE_NETWORK
+	g_Fodder = std::make_shared<cFodderMultiplayer>(g_Window);
+#else
 	g_Fodder = std::make_shared<cFodder>(g_Window);
+#endif
 
 	auto Params = std::make_shared<sFodderParameters>();
-	
+
 	if (!Params->Process(argc, argv))
 		return 0;
 
 	if (Params->mShowHelp)
 		return 0;
 
-	g_Fodder->Prepare(Params);
-	std::thread myThread(&cFodder::Interrupt_Sim, g_Fodder);
 	int result = 0;
-	
-	if (g_Fodder->mStartParams->mUnitTesting) {
-		cUnitTesting Testing;
-		result = Testing.Start() ? 0 : -1;
+	if (Params->mMapGeneratePng.size()) {
+		result = g_Fodder->Map_RenderPng(
+			Params->mMapGeneratePng,
+			Params->mMapPngOutput,
+			Params->mMapPngAddCoords,
+			Params->mMapPngAddTileIds,
+			Params->mMapPngScale) ? 0 : -1;
 	}
-	else if (g_Fodder->mStartParams->mRandomSave) {
-		sMapParams Params(g_Fodder->mRandom.get());
-		g_Fodder->CreateRandom(Params);
+	else if (Params->mMapRouteOracle.size()) {
+		// MapGen v3 Phase 1 P1.5c: headless engine route/walkable oracle.
+		// Mirrors the --map-generate-png dispatch — load nothing more than
+		// the .map + tile collision tables and answer the query JSON.
+		result = RouteOracleReplay::Run(
+			Params->mMapRouteOracle,
+			Params->mMapRouteOracleOutput) ? 0 : -1;
 	}
-	else	{
-		g_Fodder->Start();
-		g_Fodder->mGame_Data.mDemoRecorded.save();
-	}
+	else {
+		g_Fodder->Prepare(Params);
+#ifndef EMSCRIPTEN
+		std::thread myThread(&cFodder::Interrupt_Sim, g_Fodder);
+#else
+        // Asyncify pauses emscripten_set_main_loop during sleeps, so use an
+        // independent timer for the native interrupt/redraw handshake.
+        const int interruptTimer = emscripten_set_interval(
+            [](void*) { g_Fodder->Interrupt_Sim_Tick(); }, 1.0, nullptr);
+#endif
 
-	{
-		g_Fodder->mExit = true;
-		myThread.join();
+		if (g_Fodder->mStartParams->mUnitTesting) {
+			cUnitTesting Testing;
+			result = Testing.Start() ? 0 : -1;
+		}
+		else if (g_Fodder->mStartParams->mRandomSave) {
+			sMapParams Params(g_Fodder->mRandom.get());
+			result = g_Fodder->CreateRandom(Params) ? 0 : -1;
+		}
+		else	{
+			g_Fodder->Start();
+			g_Fodder->mGame_Data.mDemoRecorded.save();
+		}
+
+		{
+			g_Fodder->mExit = true;
+#ifndef EMSCRIPTEN
+			myThread.join();
+#else
+            emscripten_clear_interval(interruptTimer);
+#endif
+		}
 	}
 	return result;
 }

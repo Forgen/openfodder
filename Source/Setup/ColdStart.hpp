@@ -1,0 +1,56 @@
+/*
+ *  Open Fodder
+ *  ---------------
+ *
+ *  Copyright (C) 2008-2026 Open Fodder
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 3 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License along
+ *  with this program; if not, write to the Free Software Foundation, Inc.,
+ *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ *
+ */
+
+#pragma once
+
+#include <cstdint>
+#include <string>
+
+namespace Setup {
+
+enum class ColdStartChoice : uint8_t { Continue, Download, Quit };
+
+class ColdStartPrompt {
+public:
+    // Called early in startup AFTER SDL_Init(SDL_INIT_VIDEO) but BEFORE
+    // window creation. If game data and the essential scripts are available,
+    // returns Continue without showing any UI.
+    //
+    // If no data available, shows the built-in download window asking the user
+    // whether to download the complete runtime bundle from OpenFodder/data.
+    // The bundle includes demo data, campaigns, scripts and the About image.
+    //
+    // On Download success: refreshes ResourceMan and returns Download
+    //   (caller proceeds into the regular startup flow).
+    // On user-Cancel:       returns Quit (caller should SDL_Quit + exit).
+    // On any failure:       shows details in the same window and returns Quit.
+    //
+    // Runs a responsive progress window while a worker queries, downloads
+    // and installs the package. No game data is required to draw the UI.
+    static ColdStartChoice PromptIfNoData();
+
+private:
+    // Installs the complete data release at the runtime root.
+    static bool RunDownload(const std::string& pRuntimeRoot, std::string& pError);
+};
+
+} // namespace Setup

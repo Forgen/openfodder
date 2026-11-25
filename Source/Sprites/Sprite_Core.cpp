@@ -22,6 +22,267 @@
 
 #include "stdafx.hpp"
 
+namespace {
+
+bool Sprite_IsHumanCombatantType(int16 pSpriteType) {
+    switch (pSpriteType) {
+    case eSprite_Player:
+    case eSprite_Helicopter_Grenade_Human:
+    case eSprite_Helicopter_Unarmed_Human:
+    case eSprite_Helicopter_Missile_Human:
+    case eSprite_Helicopter_Homing_Human:
+    case eSprite_VehicleNoGun_Human:
+    case eSprite_VehicleGun_Human:
+    case eSprite_Tank_Human:
+    case eSprite_Turret_Cannon_Human:
+    case eSprite_Turret_Missile_Human:
+    case eSprite_Helicopter_Grenade_Human_Called:
+    case eSprite_Helicopter_Unarmed_Human_Called:
+    case eSprite_Helicopter_Missile_Human_Called:
+    case eSprite_Helicopter_Homing_Human_Called:
+        return true;
+
+    default:
+        return false;
+    }
+}
+
+bool Sprite_IsEnemyCombatantType(int16 pSpriteType) {
+    switch (pSpriteType) {
+    case eSprite_Enemy:
+    case eSprite_Enemy_Rocket:
+    case eSprite_Helicopter_Grenade_Enemy:
+    case eSprite_Helicopter_Unarmed_Enemy:
+    case eSprite_Helicopter_Missile_Enemy:
+    case eSprite_Helicopter_Homing_Enemy:
+    case eSprite_Tank_Enemy:
+    case eSprite_VehicleNoGun_Enemy:
+    case eSprite_VehicleGun_Enemy:
+    case eSprite_Vehicle_Unk_Enemy:
+    case eSprite_Turret_Cannon_Enemy:
+    case eSprite_Turret_Missile_Enemy:
+    case eSprite_Turret_HomingMissile_Enemy:
+    case eSprite_Enemy_Leader:
+    case eSprite_Helicopter_Homing_Enemy2:
+    case eSprite_Turret_Cannon_Invulnerable:
+    case eSprite_Turret_Missile_Invulnerable:
+    case eSprite_Looping_Vehicle_Left:
+    case eSprite_Looping_Vehicle_Right:
+    case eSprite_Looping_Vehicle_Up:
+    case eSprite_Looping_Vehicle_Down:
+        return true;
+
+    default:
+        return false;
+    }
+}
+
+}
+
+bool cFodder::Sprite_IsActiveSpritePointer(const sSprite* pSprite) const {
+    if (!pSprite || pSprite == INVALID_SPRITE_PTR || mSprites.empty())
+        return false;
+
+    const uintptr_t Ptr = reinterpret_cast<uintptr_t>(pSprite);
+    const uintptr_t Begin = reinterpret_cast<uintptr_t>(mSprites.data());
+    const uintptr_t End = Begin + (sizeof(sSprite) * mSprites.size());
+    return Ptr >= Begin && Ptr < End && pSprite->mPosX != -32768;
+}
+
+bool cFodder::Sprite_IsVehicle(const sSprite* pSprite) const {
+    if (!pSprite)
+        return false;
+
+    switch (pSprite->mSpriteType) {
+    case eSprite_Helicopter_Grenade_Human:
+    case eSprite_Helicopter_Unarmed_Human:
+    case eSprite_Helicopter_Missile_Human:
+    case eSprite_Helicopter_Homing_Human:
+    case eSprite_Helicopter_Grenade_Enemy:
+    case eSprite_Helicopter_Unarmed_Enemy:
+    case eSprite_Helicopter_Missile_Enemy:
+    case eSprite_Helicopter_Homing_Enemy:
+    case eSprite_VehicleNoGun_Human:
+    case eSprite_VehicleGun_Human:
+    case eSprite_Tank_Human:
+    case eSprite_Tank_Enemy:
+    case eSprite_Turret_Cannon_Human:
+    case eSprite_Turret_Missile_Human:
+    case eSprite_VehicleNoGun_Enemy:
+    case eSprite_VehicleGun_Enemy:
+    case eSprite_Vehicle_Unk_Enemy:
+    case eSprite_Turret_Cannon_Enemy:
+    case eSprite_Turret_Missile_Enemy:
+    case eSprite_Helicopter_Grenade_Human_Called:
+    case eSprite_Helicopter_Unarmed_Human_Called:
+    case eSprite_Helicopter_Missile_Human_Called:
+    case eSprite_Helicopter_Homing_Human_Called:
+    case eSprite_Turret_HomingMissile_Enemy:
+    case eSprite_Helicopter_Homing_Enemy2:
+    case eSprite_Turret_Cannon_Invulnerable:
+    case eSprite_Turret_Missile_Invulnerable:
+    case eSprite_Looping_Vehicle_Left:
+    case eSprite_Looping_Vehicle_Right:
+    case eSprite_Looping_Vehicle_Up:
+    case eSprite_Looping_Vehicle_Down:
+        return true;
+
+    default:
+        return false;
+    }
+}
+
+const sSprite* cFodder::Sprite_GetVehicleController(const sSprite* pVehicle) const {
+    if (!Sprite_IsActiveSpritePointer(pVehicle) || !Sprite_IsVehicle(pVehicle))
+        return 0;
+
+    for (const auto& Troop : mGame_Data.mSoldiers_Allocated) {
+        const sSprite* Sprite = Troop.mSprite;
+        if (!Sprite_IsActiveSpritePointer(Sprite))
+            continue;
+
+        if (Sprite->mSpriteType != eSprite_Player)
+            continue;
+
+        if (Sprite->mInVehicle && Sprite->mCurrentVehicle == pVehicle)
+            return Sprite;
+    }
+
+    return 0;
+}
+
+bool cFodder::Sprite_UseNetworkHostilityRules() const {
+    return false;
+}
+
+void cFodder::Sprite_SetDamageOwner(sSprite* pDamageSource, sSprite* pOwner) {
+    if (!pDamageSource)
+        return;
+
+    pDamageSource->mSourceSprite = Sprite_IsActiveSpritePointer(pOwner) ? pOwner : 0;
+}
+
+const sSprite* cFodder::Sprite_GetDamageOwner(const sSprite* pSprite) const {
+    if (!pSprite)
+        return 0;
+
+    const sSprite* Candidate = 0;
+
+    switch (pSprite->mSpriteType) {
+    case eSprite_Bullet:
+    case eSprite_Cannon:
+    case eSprite_Civilian_Spear2:
+        Candidate = pSprite->mSourceSprite;
+        if (Sprite_IsActiveSpritePointer(Candidate))
+            return Candidate;
+
+        Candidate = pSprite->mOwnerSprite;
+        break;
+
+    case eSprite_Grenade:
+    case eSprite_Rocket:
+    case eSprite_Missile:
+    case eSprite_MissileHoming:
+    case eSprite_MissileHoming2:
+    case eSprite_Explosion:
+    case eSprite_Explosion2:
+    case eSprite_Building_Explosion:
+        Candidate = pSprite->mSourceSprite;
+        break;
+
+    default:
+        Candidate = pSprite;
+        break;
+    }
+
+    return Sprite_IsActiveSpritePointer(Candidate) ? Candidate : 0;
+}
+
+bool cFodder::Sprite_CanDamageTarget(const sSprite* pDamageSource, const sSprite* pTarget) const {
+    (void)pDamageSource;
+    (void)pTarget;
+    return true;
+}
+
+bool cFodder::Sprite_CanTargetSprite(const sSprite* pActor, const sSprite* pTarget) const {
+    (void)pActor;
+    (void)pTarget;
+    return true;
+}
+
+bool cFodder::Sprite_CanVehicleDamageTarget(const sSprite* pVehicle, const sSprite* pTarget) const {
+    if (!pVehicle || !pTarget)
+        return false;
+
+    return pVehicle->mPersonType != pTarget->mPersonType;
+}
+
+bool cFodder::Sprite_ShouldDamagePlayerInRegion(const sSprite* pDamageSource, const sSprite* pTarget) const {
+    (void)pDamageSource;
+    return pTarget && pTarget->mAnimState == eSprite_Anim_Die5;
+}
+
+void cFodder::Sprite_RecordDamage(sSprite* pDamageSource, sSprite* pTarget) {
+    (void)pDamageSource;
+    (void)pTarget;
+}
+
+bool cFodder::Sprite_AreHostile(const sSprite* pLeft, const sSprite* pRight) const {
+    if (!pLeft || !pRight ||
+        pLeft == INVALID_SPRITE_PTR ||
+        pRight == INVALID_SPRITE_PTR ||
+        pLeft == pRight)
+        return false;
+
+    const bool LeftPlayer = Sprite_IsHumanCombatantType(pLeft->mSpriteType);
+    const bool RightPlayer = Sprite_IsHumanCombatantType(pRight->mSpriteType);
+    const bool LeftEnemy = Sprite_IsEnemyCombatantType(pLeft->mSpriteType);
+    const bool RightEnemy = Sprite_IsEnemyCombatantType(pRight->mSpriteType);
+
+    return (LeftPlayer && RightEnemy) || (LeftEnemy && RightPlayer);
+}
+
+bool cFodder::Sprite_IsIndependentlyControlledSquadMember(const sSprite* pSprite) const {
+    (void)pSprite;
+    return false;
+}
+
+void cFodder::Sprite_GetPlayerRankContext(sSprite* pSprite, int16& pSquad, sSprite*& pLeader) {
+    (void)pSprite;
+    pSquad = mSquad_Selected;
+    pLeader = mSquad_Leader;
+}
+
+void cFodder::Sprite_UpdatePlayerRankLeader(sSprite* pSprite, sSprite* pLeader) {
+    (void)pSprite;
+    Squad_UpdateLeader(pLeader);
+}
+
+void cFodder::Sprite_GetMouseDirectionTarget(sSprite* pSprite, int16& pTargetX, int16& pTargetY) {
+    (void)pSprite;
+    pTargetX = mMouseX;
+    pTargetX += mCameraX >> 16;
+    pTargetX -= 0x18;
+
+    pTargetY = mMouseY;
+    pTargetY += mCameraY >> 16;
+}
+
+bool cFodder::Sprite_TryHandleSharedPickupBox(sSprite* pSprite, bool pRocketBox) {
+    (void)pSprite;
+    (void)pRocketBox;
+    return false;
+}
+
+bool cFodder::Sprite_ShouldUseSelectedSquadWeapon(const sSprite* pSprite) const {
+    return pSprite == mSquad_Leader && mMouse_Button_LeftRight_Toggle;
+}
+
+void cFodder::Sprite_ClearSelectedSquadWeaponUse(const sSprite* pSprite) {
+    if (pSprite == mSquad_Leader)
+        mMouse_Button_LeftRight_Toggle = false;
+}
+
 void cFodder::Sprite_Clear_All() {
 	mSprites.resize(mParams->mSpritesMax);
 	Squad_Set_Squad_Leader();
@@ -395,6 +656,10 @@ FoundSprite:;
 
 loc_243DD:;
     return -1;
+}
+
+int16 cFodder::Sprite_Find_Hostile_By_Types(sSprite* pSprite, int16& pData0, int16& pData4, int16& pData8, int16& pDataC, int16& pData10, sSprite*& pData28) {
+    return Sprite_Find_By_Types(pSprite, pData0, pData4, pData8, pDataC, pData10, pData28);
 }
 
 void cFodder::Sprite_Handle_Computer(sSprite* pSprite, int16 pData1C) {
@@ -782,13 +1047,13 @@ int16 cFodder::Sprite_Find_In_Region(sSprite* pSprite, sSprite*& pData24, int16 
         if (Data18 < pData24->mHeight)
             continue;
 
-        if (pData24->mSpriteType != eSprite_Player)
-            goto loc_2D5FA;
-
-        if (pData24->mAnimState != eSprite_Anim_Die5)
+        if (pData24->mSpriteType == eSprite_Player &&
+            !Sprite_ShouldDamagePlayerInRegion(pSprite, pData24))
             continue;
 
     loc_2D5FA:;
+        Sprite_RecordDamage(pSprite, pData24);
+
         if (pSprite->mSpriteType == eSprite_Explosion2)
             goto AnimDie3;
 
@@ -937,7 +1202,20 @@ void cFodder::Sprite_Handle_Loop() {
         if (Data20->mPosX == -32768)
             continue;
 
+#ifdef OPENFODDER_ENABLE_NETWORK
+        uint32 rcBefore = mRandomCallCount;
+#endif
         (*this.*mSprite_Function[Data20->mSpriteType])(Data20);
+
+#ifdef OPENFODDER_ENABLE_NETWORK
+        uint32 rcAfter = mRandomCallCount;
+        if (mNetSyncLogFile && rcAfter != rcBefore) {
+            int idx = static_cast<int>(Data20 - mSprites.data());
+            fprintf(mNetSyncLogFile, "  [RNG] f=%d spr=%d type=%d rc=%u (+%u)\n",
+                    mNetFrameCount, idx, Data20->mSpriteType,
+                    rcAfter, rcAfter - rcBefore);
+        }
+#endif
     }
 }
 
@@ -1120,7 +1398,9 @@ loc_1B2B6:;
     pSprite->field_43 = -1;
 }
 
-void cFodder::Sprite_Handle_BuildingDoor3(sSprite* pSprite) {
+// Bunker doors ignore the Die1 state produced by ordinary grenades and
+// rockets. Only Explosion2 damage sets Die3 and reaches this destruction path.
+void cFodder::Sprite_Handle_BunkerDoor_HeavyExplosionOnly(sSprite* pSprite) {
     int16 Data0, Data4;
     sSprite* Data2C = 0;
 
@@ -1180,20 +1460,20 @@ loc_1D928:;
     Sprite_Create_Enemy(pSprite, Data2C);
 }
 
-void cFodder::Sprite_Handle_BuildingDoor_Reinforced(sSprite* pSprite) {
+void cFodder::Sprite_Handle_BunkerDoor_ReinforcedHeavyExplosionOnly(sSprite* pSprite) {
     if (pSprite->mAnimState != eSprite_Anim_Die3) {
-        Sprite_Handle_BuildingDoor3(pSprite);
+        Sprite_Handle_BunkerDoor_HeavyExplosionOnly(pSprite);
         return;
     }
 
     if (pSprite->mHeliRestartFrame >= 0x69) {
-        Sprite_Handle_BuildingDoor3(pSprite);
+        Sprite_Handle_BunkerDoor_HeavyExplosionOnly(pSprite);
         return;
     }
 
     pSprite->mHeliRestartFrame += 1;
     pSprite->mAnimState = eSprite_Anim_None;
-    Sprite_Handle_BuildingDoor3(pSprite);
+    Sprite_Handle_BunkerDoor_HeavyExplosionOnly(pSprite);
 }
 
 void cFodder::Sprite_Handle_Computer_1(sSprite* pSprite) {
@@ -1256,15 +1536,15 @@ void cFodder::Sprite_Draw_Row_Update(sSprite* pSprite) {
     Sprite_Terrain_Check(pSprite, Data4);
 
     // Not leaving water?
-    if (PreviousTileType != eTerrainFeature_Water)
+    if (PreviousTileType != eTerrainFeature_DeepWater)
         goto loc_1F75D;
 
     // Leaving water and into Quick sand?
-    if (pSprite->mTerrainType == eTerrainFeature_QuickSand)
+    if (pSprite->mTerrainType == eTerrainFeature_SoftHazard)
         goto loc_1F753;
 
     // Leaving water for the edge/bank
-    if (pSprite->mTerrainType != eTerrainFeature_WaterEdge)
+    if (pSprite->mTerrainType != eTerrainFeature_ShallowWater)
         goto loc_1F75D;
 
     pSprite->mRowsToSkip = 5;
@@ -1289,7 +1569,7 @@ void cFodder::Sprite_Terrain_Check(sSprite* pSprite, int16& pData4) {
     pSprite->field_50 = 0;
     pSprite->mInWater = 0;
 
-    if (pData4 == eTerrainFeature_Drop2) {
+    if (pData4 == eTerrainFeature_PitDrop) {
         if (pSprite->mSpriteType == eSprite_Enemy)
             goto loc_20251;
 
@@ -1303,7 +1583,7 @@ void cFodder::Sprite_Terrain_Check(sSprite* pSprite, int16& pData4) {
     }
 
     //loc_20044
-    if (pData4 == eTerrainFeature_Drop) {
+    if (pData4 == eTerrainFeature_LedgeDrop) {
 
         if (pSprite->mSpriteType == eSprite_Enemy)
             goto loc_20251;
@@ -1317,13 +1597,13 @@ void cFodder::Sprite_Terrain_Check(sSprite* pSprite, int16& pData4) {
 
     //loc_20072
     pSprite->mDelayCounter = 0;
-    if (pData4 == eTerrainFeature_QuickSandEdge)
+    if (pData4 == eTerrainFeature_SlipperyGround)
         goto loc_201CC;
 
-    if (pData4 == eTerrainFeature_Rocky)
+    if (pData4 == eTerrainFeature_RoughGround)
         goto loc_20108;
 
-    if (pData4 == eTerrainFeature_Rocky2)
+    if (pData4 == eTerrainFeature_RaisedRoughGround)
         goto loc_2014D;
 
     if (!pSprite->mRockyHeightActive)
@@ -1340,13 +1620,13 @@ loc_200B7:;
     pSprite->mRockyHeightActive = 0;
 
 loc_200C0:;
-    if (pData4 == eTerrainFeature_QuickSand)
+    if (pData4 == eTerrainFeature_SoftHazard)
         goto Soldier_InQuickSand;
 
-    if (pData4 == eTerrainFeature_WaterEdge)
+    if (pData4 == eTerrainFeature_ShallowWater)
         goto Soldier_WaterEdge;
 
-    if (pData4 != eTerrainFeature_Water)
+    if (pData4 != eTerrainFeature_DeepWater)
         goto checkSinking;
 
     // Is a Native?
@@ -1396,7 +1676,7 @@ Soldier_WaterEdge:;
     return;
 
 checkSinking:;
-    if (pData4 == eTerrainFeature_Sink)
+    if (pData4 == eTerrainFeature_SinkingGround)
         goto HumanSinking;
 
     pSprite->mRowsToSkip = 0;
@@ -1427,7 +1707,7 @@ HumanSinking:;
     return;
 
 CheckFalling:;
-    if (pData4 == eTerrainFeature_Drop || pData4 == eTerrainFeature_Drop2) {
+    if (pData4 == eTerrainFeature_LedgeDrop || pData4 == eTerrainFeature_PitDrop) {
         pSprite->mAnimState = eSprite_Anim_Hit2;
         return;
     }
@@ -1445,13 +1725,13 @@ loc_20251:;
     if (Map_Terrain_Get_Type_And_Walkable(pSprite, Data0, pData4))
         goto loc_202E5;
 
-    if (pData4 == eTerrainFeature_Drop)
+    if (pData4 == eTerrainFeature_LedgeDrop)
         goto loc_202E5;
 
-    if (pData4 == eTerrainFeature_Drop2)
+    if (pData4 == eTerrainFeature_PitDrop)
         goto loc_202E5;
 
-    if (pSprite->mPersonType == eSprite_PersonType_Native && pData4 == eTerrainFeature_Water)
+    if (pSprite->mPersonType == eSprite_PersonType_Native && pData4 == eTerrainFeature_DeepWater)
         goto loc_202E5;
 
     Data0 = pSprite->mDirection;
@@ -1612,7 +1892,7 @@ int16 cFodder::Sprite_Reached_Target(sSprite* pSprite) {
 void cFodder::Sprite_Movement_Speed_Update(sSprite* pSprite) {
     int16 Data0 = pSprite->mDirection;
 
-    if (pSprite->mTerrainType != eTerrainFeature_D)
+    if (pSprite->mTerrainType != eTerrainFeature_DirectionalSlope)
         goto loc_20FBB;
 
     //seg005:1843
@@ -1657,10 +1937,10 @@ loc_20F9B:;
     return;
 
 loc_20FBB:;
-    if (pSprite->mTerrainType == eTerrainFeature_Rocky)
+    if (pSprite->mTerrainType == eTerrainFeature_RoughGround)
         goto loc_20FD1;
 
-    if (pSprite->mTerrainType != eTerrainFeature_Rocky2)
+    if (pSprite->mTerrainType != eTerrainFeature_RaisedRoughGround)
         goto loc_20FE3;
 
 loc_20FD1:;
@@ -1670,7 +1950,7 @@ loc_20FD9:;
     pSprite->mSpeed >>= 1;
     return;
 loc_20FE3:;
-    if (pSprite->mTerrainType != eTerrainFeature_Snow)
+    if (pSprite->mTerrainType != eTerrainFeature_SlowGround)
         return;
 
     Data0 = pSprite->mPosX;
@@ -1858,16 +2138,16 @@ loc_2132A:;
     if (pSprite->mHeight)
         return;
 
-    if (Data4 == eTerrainFeature_WaterEdge)
+    if (Data4 == eTerrainFeature_ShallowWater)
         goto loc_21464;
 
-    if (Data4 == eTerrainFeature_Water)
+    if (Data4 == eTerrainFeature_DeepWater)
         goto loc_21464;
 
-    if (Data4 == eTerrainFeature_Drop)
+    if (Data4 == eTerrainFeature_LedgeDrop)
         goto loc_21464;
 
-    if (Data4 == eTerrainFeature_Drop2)
+    if (Data4 == eTerrainFeature_PitDrop)
         goto loc_21464;
 
     return;
@@ -2044,6 +2324,9 @@ void cFodder::Sprite_Update_Follower_Target(sSprite* pSprite) {
         if (Squad0_Member == INVALID_SPRITE_PTR)
             goto loc_21E4A;
 
+        if (!Sprite_CanTargetSprite(pSprite, Squad0_Member))
+            goto loc_21E4A;
+
         if ((tool_RandomGet() & 0x3F) == 0)
             goto loc_21E4A;
 
@@ -2175,6 +2458,8 @@ void cFodder::Sprite_Update_Follower_Target(sSprite* pSprite) {
             goto loc_22125;
 
         Data0 = mSquad_0_Sprites[pSprite->field_5E_Squad];
+        if (!Sprite_CanTargetSprite(pSprite, Data0))
+            goto loc_22125;
     }
 
     // "Sort of" Random Movement Target

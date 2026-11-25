@@ -121,7 +121,7 @@ void cFodder::Map_Count_Sprites()
 void cFodder::Map_Create(sMapParams pParams)
 {
 
-    if (mVersionCurrent->isAmigaPower())
+    if (mVersionCurrent && mVersionCurrent->isAmigaPower())
         pParams.mTileSub = eTileSub_1;
 
     mMapLoaded = std::make_shared<cRandomMap>(pParams);
@@ -316,6 +316,8 @@ void cFodder::Map_Overview_Prepare()
             mGraphics->MapOverview_Render_Tiles(*MapPtr & 0x1FF, cx + mSurfaceMapLeft, dx + mSurfaceMapTop);
         }
     }
+
+    mSurfaceMapOverview->Save();
 }
 
 int16 cFodder::Map_Sprite_Check_Around_Position(sSprite *pSprite)

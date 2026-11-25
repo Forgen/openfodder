@@ -23,6 +23,12 @@
 #include "stdafx.hpp"
 
 void cFodder::Image_FadeIn() {
+    // Replay fades still run interrupts with the recording tick paused.
+    // Those interrupts update the mouse and camera even without video output.
+    if (mStartParams && mStartParams->mDisableVideo &&
+        !mStartParams->mDemoPlayback && !mStartParams->mDemoRecord)
+        return;
+
     mSurface->Save();
     mGraphics->PaletteSet();
     mGame_Data.mDemoRecorded.DisableTicks();
@@ -38,12 +44,12 @@ void cFodder::Image_FadeIn() {
 }
 
 void cFodder::Image_FadeOut() {
+    if (mStartParams && mStartParams->mDisableVideo &&
+        !mStartParams->mDemoPlayback && !mStartParams->mDemoRecord)
+        return;
 
     mSurface->Save();
     mSurface->paletteNew_SetToBlack();
-#ifdef EMSCRIPTEN
-	return;
-#endif
     mGame_Data.mDemoRecorded.DisableTicks();
     while (mSurface->isPaletteAdjusting()) {
 

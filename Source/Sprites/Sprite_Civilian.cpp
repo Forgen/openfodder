@@ -216,13 +216,13 @@ void cFodder::Sprite_Civilian_Update_Movement(sSprite* pSprite) {
 
     Data4 = pSprite->mTerrainType;
 
-    if (Data4 == 6) {
+    if (Data4 == eTerrainFeature_DeepWater) {
         Sprite_XY_Restore(pSprite);
         return;
     }
 
-    if (Data4 != 4) {
-        if (Data4 != 5)
+    if (Data4 != eTerrainFeature_SoftHazard) {
+        if (Data4 != eTerrainFeature_ShallowWater)
             return;
 
         pSprite->mRowsToSkip = 5;
@@ -408,6 +408,7 @@ int16 cFodder::Sprite_Create_Civilian_Spear2(sSprite* pSprite) {
     Data2C->mRowsToSkip = 0;
     Data2C->field_3A = 0;
     Data2C->mOwnerSprite = pSprite;
+    Sprite_SetDamageOwner(Data2C, pSprite);
     Data2C->field_2A = 2;
     Data2C->mProjectileOffsetX = 0;
     Data2C->mProjectileOffsetY = 2;

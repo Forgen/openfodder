@@ -23,6 +23,10 @@
 #include "stdafx.hpp"
 #include "gitver.hpp"
 
+#include "Setup/UpdateChecker.hpp"
+
+#include <string>
+
 static std::string compiled = std::string(__DATE__) + " AT " + std::string(__TIME__);
 static std::string version = "VERSION " + std::string(gitversion);
 
@@ -60,8 +64,10 @@ cAbout::cAbout() {
 		{ TEXTPOS_THANKS + 20, "STOO CAMBRIDGE"},
         { TEXTPOS_THANKS + 30, "CLAIRE CROSSFIELD"},
         { TEXTPOS_THANKS + 40, "LACHIE CROSSFIELD"},
-        { TEXTPOS_THANKS + 50, "RILEY ELLETT"},
-        { TEXTPOS_THANKS + 60, "SCUMMVM"},
+        { TEXTPOS_THANKS + 50, "HAMISH CROSSFIELD"},
+        { TEXTPOS_THANKS + 60, "AUDREY CROSSFIELD"},
+        { TEXTPOS_THANKS + 70, "RILEY ELLETT"},
+        { TEXTPOS_THANKS + 80, "SCUMMVM"},
 
         { TEXTPOS_POWERED + 0,  "POWERED BY"},
         { TEXTPOS_POWERED + 10, "CPP17"},
@@ -112,6 +118,17 @@ cAbout::~cAbout() {
 
 bool cAbout::Cycle() {
 
+    // Drive the async update worker before any UI work — Pump may pop a
+    // modal dialog (info, install prompt, error) when state transitions
+    // into a terminal value, and any dialog needs to happen before the
+    // surface is rendered or the back-buffer state diverges from what's
+    // on screen.
+    bool updateBusy = false;
+#ifndef EMSCRIPTEN
+    Setup::UpdateChecker::Instance().Pump();
+    updateBusy = Setup::UpdateChecker::Instance().IsBusy();
+#endif
+
     g_Fodder->GUI_Element_Reset();
 
     g_Fodder->mSurface->palette_FadeTowardNew();
@@ -128,11 +145,36 @@ bool cAbout::Cycle() {
         g_Fodder->String_Print_Large("Open Fodder", true, 0x01);
         g_Fodder->mString_GapCharID = 0x00;
 
-        g_Fodder->GUI_Button_Draw_Small("BACK", 0xB3 + PLATFORM_BASED(0, 25));
-        g_Fodder->GUI_Button_Setup(&cFodder::GUI_Button_Load_Exit);
+        // UPDATE sits one row above BACK (empty slot called out in the
+        // layout note for the About screen). Forwarded to cAbout::OnUpdateClicked
+        // via the cFodder trampoline because GUI_Button_Setup requires a
+        // void(cFodder::*)() member-function pointer.
+#ifndef EMSCRIPTEN
+        g_Fodder->GUI_Button_Draw_Small("UPDATE", 0x9C + PLATFORM_BASED(0, 25));
+        g_Fodder->GUI_Button_Setup(&cFodder::GUI_Button_About_Update);
+#endif
+
+        // Do not resume gameplay while files are being published or before
+        // the main thread has reloaded the installed scripts.
+        if (!updateBusy) {
+            g_Fodder->GUI_Button_Draw_Small("BACK", 0xB3 + PLATFORM_BASED(0, 25));
+            g_Fodder->GUI_Button_Setup(&cFodder::GUI_Button_Load_Exit);
+        }
+
+        // Status line below the buttons — empty when no work is in
+        // flight, "CHECKING FOR UPDATES..." or "INSTALLING 45%" while
+        // the worker thread is busy. Painted via String_Print_Small
+        // (per-frame draw) rather than Service_Draw_String (which
+        // appends to mService_Draw_List and would unbounded-grow the
+        // list on every frame).
+#ifndef EMSCRIPTEN
+        const std::string status = Setup::UpdateChecker::Instance().StatusLine();
+        if (!status.empty())
+            g_Fodder->String_Print_Small(status, 0xCA + PLATFORM_BASED(0, 25));
+#endif
     }
 
-    if (g_Fodder->mPhase_Aborted)
+    if (g_Fodder->mPhase_Aborted && !updateBusy)
         g_Fodder->GUI_Button_Load_Exit();
 
     if (g_Fodder->mMouse_Button_Left_Toggle) {
@@ -153,8 +195,26 @@ bool cAbout::Cycle() {
     g_Fodder->mWindow->RenderAt(g_Fodder->mSurface);
     //g_Fodder->Video_SurfaceRender(false, false, 0, false);
 
-    if (g_Fodder->mGUI_SaveLoadAction == 1 && !g_Fodder->mSurface->isPaletteAdjusting())
+    if (g_Fodder->mGUI_SaveLoadAction == 1 && !g_Fodder->mSurface->isPaletteAdjusting()
+        && !updateBusy)
         return false;
 
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// UPDATE button — kicks off an async query against GitHub for newer
+// compatible data + scripts releases. The Pump() call inside cAbout::Cycle
+// drives the state machine forward each frame: when the worker reports a
+// finished query, Pump shows either the "up to date" toast or the
+// "install?" prompt; on accept, Pump kicks the install worker; when that
+// finishes, Pump emits the success/failure toast and returns to Idle.
+//
+// Spamming the button is harmless — StartQuery is a CAS-guarded no-op when
+// a check is already in flight.
+// ---------------------------------------------------------------------------
+void cAbout::OnUpdateClicked() {
+#ifndef EMSCRIPTEN
+    Setup::UpdateChecker::Instance().StartQuery();
+#endif
 }

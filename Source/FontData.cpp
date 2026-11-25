@@ -22,17 +22,46 @@
 
 #include "stdafx.hpp"
 
+// Briefing font glyph widths (one byte per ASCII codepoint, 0..127).
+//
+// Index 0x20 is space; 0x27 is apostrophe; 0x30..0x39 are digits; 0x41..0x5A
+// are A-Z. The original game's data only filled in the latter; we extend the
+// table here to cover punctuation and structural characters that show up in
+// modern UI strings (paths, version numbers, error messages, etc.).
+//
+// Glyphs for non-A..Z/0..9 entries are NOT in pstuff's sprite sheet — they
+// are drawn at runtime by cFodder::String_Print_DrawTinyGlyph (engine-wide,
+// matches the briefing font's stroke weight). Advances must cover the bitmaps
+// in FontData_Special.cpp, including any trailing space before the next glyph.
 const uint8 mFont_Briefing_Width[] = {
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
-  0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x04, 
-  0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x00, 0x00, 
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x08, 0x08, 0x08, 0x08, 
-  0x08, 0x08, 0x08, 0x03, 0x07, 0x08, 0x08, 0x0A, 0x08, 0x08, 
-  0x08, 0x08, 0x08, 0x08, 0x09, 0x08, 0x08, 0x0A, 0x08, 0x09, 
-  0x07, 0x00, 0x00, 0x00, 0x00, 0x00
+  // 0x00..0x1F: control characters — never drawn, all zero (32 entries)
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  // 0x20..0x2F:  ' ' '!' '"' '#' '$' '%' '&' ''' '(' ')' '*' '+' ',' '-' '.' '/'
+  // (widths bumped where the FontData_Special bitmaps gained a column to
+  // carry 2-px-thick strokes that match A-Z weight; '.' stays 6 — that
+  // glyph is still drawn from pstuff slot 36, the special-glyph entry is
+  // fallback-only and shouldn't change advance.)
+  // '$' needs four pixels of trailing space after its six-pixel bitmap.
+  0x06, 0x04, 0x06, 0x07, 0x0A, 0x07, 0x07, 0x04, 0x04, 0x04, 0x06, 0x08, 0x04, 0x06, 0x06, 0x07,
+  // 0x30..0x39: '0'..'9'  (real sprite glyphs in pstuff — widths from original game)
+  0x08, 0x04, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08,
+  // 0x3A..0x40: ':' ';' '<' '=' '>' '?' '@'
+  0x04, 0x04, 0x06, 0x06, 0x06, 0x06, 0x08,
+  // 0x41..0x5A: 'A'..'Z'  (real sprite glyphs in pstuff — widths from original game)
+  0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x03, 0x07,    // A B C D E F G H I J
+  0x08, 0x08, 0x0A, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x09,    // K L M N O P Q R S T
+  0x08, 0x08, 0x0A, 0x08, 0x09, 0x07,                            // U V W X Y Z
+  // 0x5B..0x60: '[' '\' ']' '^' '_' '`'
+  0x05, 0x05, 0x04, 0x06, 0x06, 0x04,
+  // 0x61..0x7A: 'a'..'z'  (no lowercase sprite glyphs; printer up-cases input
+  //                       before lookup, so widths are unused but kept zero
+  //                       defensively)
+  0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0, 0,
+  // 0x7B..0x7F: '{' '|' '}' '~' DEL
+  0x05, 0x03, 0x05, 0x07, 0x00
 };
 
 const uint8 mFont_Recruit_Width[] = {
@@ -48,6 +77,13 @@ const uint8 mFont_Recruit_Width[] = {
   0x0C, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
+// Sidebar (small) font advance widths.
+//
+// Used by GUI_Sidebar_Number_Draw and GUI_Sidebar_TroopList_Name_Draw to size
+// values within the 0x30 px sidebar column. The original game only filled in
+// A-Z + '.' + ' '; the in-game number-draw path uses a separate pstuff sprite
+// base (0xAF + digit_value) and intentionally leaves digit widths at 0 here
+// so String_CalculateWidth treats numbers as zero-width for centring.
 const uint8 mFont_Sidebar_Width[] = {
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -58,16 +94,28 @@ const uint8 mFont_Sidebar_Width[] = {
 	0x00, 0x00, 0x00, 0x00
 };
 
+// Underlined / large title font widths.
+//
+// Index 0x20 (space) is now 8 — original game had it as 0 because every
+// shipped retail string is single-word ("OPTIONS", "MULTIPLAYER", etc.) so
+// the title path never exercised the space gap. Modern UI strings ("PLAY
+// DEMO", "LOCATE DATA") need real spacing.
+//
+// We do NOT add widths for ':' '/' '\\' etc. here — the underlined-font draw
+// path looks them up in mGUI_Font_SpecialCharacters / stru_42B78 / stru_42DE8
+// for the actual glyph data. Adding widths without matching sprite slots
+// would still leave the special chars invisible. Keep the title-font surface
+// to A-Z 0-9 + the existing punctuation set the original game shipped.
 const uint8 mFont_Underlined_Width[] = {
-    0,   0,   0,   0,   0,   0,   0,   0,   0,   0, 
-    0,   0,   0,   0,   0,   0,   0,   0,   0,   0, 
-    0,   0,   0,   0,   0,   0,   0,   0,   0,   0, 
-    0,   0,   8,   0,   0,   0,   0,   0,   0,   7, 
-    0,   0,   0,   0,   0,   0,   0,   0,  11,   8, 
-    9,   8,  10,   9,  10,   9,  10,  10,   0,   0, 
-    0,   0,   0,   0,   0,  15,  12,  13,  13,  11, 
-   11,  14,  13,   6,   8,  13,  12,  16,  13,  14, 
-   11,  15,  13,  10,  12,  13,  15,  16,  14,  13, 
+    0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+    0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+    0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+    0,   0,   8,   0,   0,   0,   0,   0,   0,   7,
+    0,   0,   0,   0,   0,   0,   0,   0,  11,   8,
+    9,   8,  10,   9,  10,   9,  10,  10,   0,   0,
+    0,   0,   0,   0,   0,  15,  12,  13,  13,  11,
+   11,  14,  13,   6,   8,  13,  12,  16,  13,  14,
+   11,  15,  13,  10,  12,  13,  15,  16,  14,  13,
    12,   0,   0,   0,   0,   0
 };
 

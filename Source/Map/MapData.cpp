@@ -36,7 +36,7 @@ sMapParams::sMapParams(size_t pSeed) {
 	mHeight = 20;
 
 	if (pSeed)
-		mRandom.setSeed((int16)pSeed);
+		mRandom.setSeed((uint32_t)pSeed);
 }
 
 cMapData::cMapData() {
@@ -45,28 +45,30 @@ cMapData::cMapData() {
 }
 
 int32 cMapData::Tile_Get(const size_t pTileX, const size_t pTileY) {
-	if (pTileX > mParams.mWidth || pTileY > mParams.mHeight)
+	if (pTileX >= mParams.mWidth || pTileY >= mParams.mHeight)
 		return -1;
 
 	size_t Tile = (((pTileY * mParams.mWidth) + pTileX)) + mParams.mWidth;
 
-	uint8* CurrentMapPtr = mData->data() + mTile_Ptr + (Tile * 2);
-	if (CurrentMapPtr > mData->data() + mData->size())
+	size_t TileByteOffset = mTile_Ptr + (Tile * 2);
+	if (TileByteOffset + sizeof(uint16) > mData->size())
 		return -1;
 
+	uint8* CurrentMapPtr = mData->data() + TileByteOffset;
 	return readLE<int16>(CurrentMapPtr);
 }
 
 void cMapData::Tile_Set(const size_t pTileX, const size_t pTileY, const size_t pTileID) {
-	if (pTileX > mParams.mWidth || pTileY > mParams.mHeight)
+	if (pTileX >= mParams.mWidth || pTileY >= mParams.mHeight)
 		return;
 
 	size_t Tile = (((pTileY *  mParams.mWidth) + pTileX)) + mParams.mWidth;
 
-	uint8* CurrentMapPtr = mData->data() + mTile_Ptr + (Tile * 2);
-	if (CurrentMapPtr > mData->data() + mData->size())
+	size_t TileByteOffset = mTile_Ptr + (Tile * 2);
+	if (TileByteOffset + sizeof(uint16) > mData->size())
 		return;
 
+	uint8* CurrentMapPtr = mData->data() + TileByteOffset;
 	writeLEWord(CurrentMapPtr, (uint16)pTileID);
 }
 
@@ -88,6 +90,20 @@ void cMapData::Sprite_Add(size_t pSpriteID, size_t pSpriteX, size_t pSpriteY) {
 	case eSprite_VehicleNoGun_Enemy:
 	case eSprite_VehicleGun_Enemy:
 	case eSprite_Vehicle_Unk_Enemy:
+	// Turrets need a trailing companion slot: Sprite_Handle_Turret writes a
+	// Flashing_Light into (turret + 1) every frame. Without the reserved Null the
+	// light clobbers whatever sprite follows (e.g. the next turret), so that
+	// sprite's gun never renders and only its 381/382 base tile shows. The runtime
+	// cFodder::Sprite_Add reserves this slot and shipped .spt files include a
+	// type-41 after each turret; cMapData::Sprite_Add (used when generating/saving
+	// random maps) was missing it.
+	case eSprite_Turret_Cannon_Human:
+	case eSprite_Turret_Missile_Human:
+	case eSprite_Turret_Cannon_Enemy:
+	case eSprite_Turret_Missile_Enemy:
+	case eSprite_Turret_HomingMissile_Enemy:
+	case eSprite_Turret_Cannon_Invulnerable:
+	case eSprite_Turret_Missile_Invulnerable:
 		First.mSpriteType = eSprite_Null;
 		mSprites.push_back(First);
 		break;

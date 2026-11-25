@@ -24,6 +24,11 @@
 #include "Utils/dukglue/dukglue.h"
 #include "Utils/SimplexNoise.hpp"
 #include "Map/Random.hpp"
+#include "JitScripting.hpp"
+#include "Setup/DataRelease.hpp"
+#include "Setup/EngineVersion.hpp"
+#include <filesystem>
+#include <stdexcept>
 #ifdef OF_JS_DEBUG
 #include "Utils/duk_trans_socket.h"
 #endif
@@ -54,6 +59,41 @@ void consoleClear() {
 #ifdef DEBUG
 	g_Debugger->ClearConsole();
 #endif
+}
+
+static duk_ret_t PositionConstructor(duk_context* ctx) {
+	if (!duk_is_constructor_call(ctx)) {
+		duk_error(ctx, DUK_RET_TYPE_ERROR, "Constructor must be called with new cPosition().");
+		return DUK_RET_TYPE_ERROR;
+	}
+
+	const duk_idx_t ArgumentCount = duk_get_top(ctx);
+	int X = 0;
+	int Y = 0;
+
+	if (ArgumentCount > 0 && !duk_is_undefined(ctx, 0))
+		X = duk_require_int(ctx, 0);
+	if (ArgumentCount > 1 && !duk_is_undefined(ctx, 1))
+		Y = duk_require_int(ctx, 1);
+
+	cPosition* Position = new cPosition();
+	Position->setX(X);
+	Position->setY(Y);
+
+	duk_push_this(ctx);
+	duk_push_pointer(ctx, Position);
+	duk_put_prop_string(ctx, -2, "\xFF" "obj_ptr");
+	dukglue::detail::RefManager::register_native_object(ctx, Position);
+	duk_pop(ctx);
+
+	return 0;
+}
+
+static void RegisterPositionConstructor(duk_context* ctx) {
+	duk_push_c_function(ctx, PositionConstructor, DUK_VARARGS);
+	dukglue::detail::ProtoManager::push_prototype<cPosition>(ctx);
+	duk_put_prop_string(ctx, -2, "prototype");
+	duk_put_global_string(ctx, "cPosition");
 }
 
 cScriptFileIO::cScriptFileIO(std::string pFilename, bool pRead) {
@@ -171,14 +211,40 @@ cScriptingEngine::cScriptingEngine() {
 	mContext = duk_create_heap_default();
 
 	init();
+    // Legacy/manual script trees may lack a manifest. When a manifest is
+    // supplied, reject damaged or incompatible metadata before executing JS.
+    try {
+        const auto root = g_ResourceMan->GetScriptPath("");
+        if (root.empty())
+            throw std::runtime_error("Scripts directory is missing");
+        if (std::filesystem::exists(std::filesystem::path(root) / "installed.json")) {
+            Setup::DataRelease release;
+            int dv = 0, sv = 0;
+            if (!release.ReadInstalledManifest(root, dv, sv))
+                throw std::runtime_error(release.LastError());
+            if (!Setup::IsScriptVersionCompatible(sv))
+                throw std::runtime_error("Installed scripts are incompatible with this engine (version " + std::to_string(sv) + ")");
+        }
+    } catch (const std::exception& ex) {
+        mScriptsLoaded = false;
+        g_Debugger->Error(ex.what());
+        return;
+    }
+    const bool requireJit = std::ifstream("mapgen_jit.flag").good();
+    if(!std::ifstream("mapgen_interpreter.flag").good() && !g_Fodder->mStartParams->mDebugger) {
+        auto jit = std::make_unique<cJitScripting>(mContext);
+        if(jit->available()) mJit = std::move(jit);
+    }
+    if(requireJit && !mJit) {
+        g_Debugger->Error("JIT scripting was requested but is unavailable");
+        mScriptsLoaded = false;
+    }
 	spritesCreateObject();
 
-	scriptsLoadFolder("Terrain/");
-	scriptsLoadFolder("Terrain/Jungle/");
-
-	scriptsLoadFolder("General/");
-	scriptsLoadFolder("General/Names/");
-	scriptsLoadFolder("General/Structures/");
+	scriptsLoadFolder("Common/");
+	scriptsLoadFolder("Common/Names/");
+	scriptsLoadFolder("Common/Structures/");
+	scriptsLoadFolder("Common/Generated/");
 
 	scriptsLoadFolder("Objectives/");
 	scriptsLoadFolder("Objectives/Kill.All.Enemy/");
@@ -193,13 +259,30 @@ cScriptingEngine::cScriptingEngine() {
 	scriptsLoadFolder("Objectives/Activate.Switches/");
 	scriptsLoadFolder("Objectives/Rescue.Hostage/");
 
+	scriptsLoadFolder("MapGen/");
+	// P1.2: v3 IntentMap skeleton folder — must load BEFORE Grammar so
+	// MapGen.Intent.* is available when Concepts register at module init.
+	scriptsLoadFolder("MapGen/Intent/");
+	scriptsLoadFolder("MapGen/Intent/Concepts/");
+	scriptsLoadFolder("MapGen/Grammar/");
+	scriptsLoadFolder("MapGen/Layout/");
+	scriptsLoadFolder("MapGen/Layout/Templates/");
+	scriptsLoadFolder("MapGen/Terrain/");
+	scriptsLoadFolder("MapGen/Terrain/Smoothing/Data/");
+	scriptsLoadFolder("MapGen/Terrain/Smoothing/");
+	scriptsLoadFolder("MapGen/Features/");
+	scriptsLoadFolder("MapGen/Encounters/");
+	scriptsLoadFolder("MapGen/Decor/");
+	scriptsLoadFolder("MapGen/Integration/");
 
 	scriptsLoadFolder("Scenarios/");
-	Run("Settings.js");
+    if (!Run("Settings.js"))
+        mScriptsLoaded = false;
 }
 
 cScriptingEngine::~cScriptingEngine() {
 
+    mJit.reset();
 	duk_destroy_heap(mContext);
 }
 
@@ -235,7 +318,7 @@ void cScriptingEngine::init() {
 	dukglue_register_method(mContext, &cScriptFileIO::isOpen, "isOpen");
 
 	// cPosition
-	dukglue_register_constructor<cPosition>(mContext, "cPosition");
+	RegisterPositionConstructor(mContext);
 
 	dukglue_register_property(mContext, &cPosition::getX, &cPosition::setX, "x");
 	dukglue_register_property(mContext, &cPosition::getY, &cPosition::setY, "y");
@@ -281,6 +364,29 @@ void cScriptingEngine::init() {
 	dukglue_register_method(mContext, &cRandomMap::Sprite_Add, "SpriteAdd");
 	dukglue_register_method(mContext, &cRandomMap::Tile_Get, "TileGet");
 	dukglue_register_method(mContext, &cRandomMap::Tile_Set, "TileSet");
+
+	// Engine-authoritative terrain queries (HIT/BHT collision) so the generator
+	// can ask what a tile actually IS in-game instead of guessing from tile IDs.
+	dukglue_register_method(mContext, &cRandomMap::getTileTerrainFeature, "TileTerrainFeature");
+	dukglue_register_method(mContext, &cRandomMap::isTileWalkable, "TileIsWalkable");
+
+	// Native ice Wang-tile edge matcher (the hot ~47% of each ice render). The
+	// authored atlas + per-cell semantics stay in JS (Core.ApplyEdgeRule); these
+	// cache the atlas once and run the scoring loop.
+	dukglue_register_method(mContext, &cRandomMap::setIceEdgeAtlas, "SetIceEdgeAtlas");
+	dukglue_register_method(mContext, &cRandomMap::applyIceEdgeRule, "ApplyIceEdgeRule");
+	dukglue_register_method(mContext, &cRandomMap::applyIceEdgeRuleMasked, "ApplyIceEdgeRuleMasked");
+	dukglue_register_method(mContext, &cRandomMap::applyIceEdgeRuleMaskedRegion, "ApplyIceEdgeRuleMaskedRegion");
+
+	// MapGen-native pathfinding over generator cost/walkability grids. The JS
+	// generator owns layer semantics and keeps a safe fallback; these methods only
+	// accelerate the hot deterministic search loops.
+	dukglue_register_method(mContext, &cRandomMap::setMapGenPathCostGrid, "SetMapGenPathCostGrid");
+	dukglue_register_method(mContext, &cRandomMap::setMapGenPathCost, "SetMapGenPathCost");
+	dukglue_register_method(mContext, &cRandomMap::mapGenAstar, "MapGenAstar");
+	dukglue_register_method(mContext, &cRandomMap::setMapGenWalkabilityGrid, "SetMapGenWalkabilityGrid");
+	dukglue_register_method(mContext, &cRandomMap::mapGenShortestPath, "MapGenShortestPath");
+	dukglue_register_method(mContext, &cRandomMap::mapGenCanReach, "MapGenCanReach");
 
 	dukglue_register_property(mContext, &cRandomMap::getSeed, &cRandomMap::setSeed, "seed");
 
@@ -330,10 +436,38 @@ void cScriptingEngine::init() {
 
 	dukglue_register_method(mContext, &cScriptingEngine::getCampaign, "getCampaign");
 	dukglue_register_method(mContext, &cScriptingEngine::getMap, "getMap");
+    dukglue_register_method(mContext, &cScriptingEngine::scriptRuntime, "scriptRuntime");
+    dukglue_register_method(mContext, &cScriptingEngine::scriptRuntimeLibrary, "scriptRuntimeLibrary");
 	dukglue_register_method(mContext, &cScriptingEngine::getPhase, "getPhase");
 	dukglue_register_method(mContext, &cScriptingEngine::getMission, "getMission");
 
 	dukglue_register_method(mContext, &cScriptingEngine::guiPrintString, "guiPrintString");
+	dukglue_register_method(mContext, &cScriptingEngine::networkEnabled, "networkEnabled");
+	dukglue_register_method(mContext, &cScriptingEngine::networkGameMode, "networkGameMode");
+	dukglue_register_method(mContext, &cScriptingEngine::networkMapSeed, "networkMapSeed");
+	dukglue_register_method(mContext, &cScriptingEngine::networkPlayerCount, "networkPlayerCount");
+	dukglue_register_method(mContext, &cScriptingEngine::networkTeamCount, "networkTeamCount");
+	dukglue_register_method(mContext, &cScriptingEngine::networkTeamSize, "networkTeamSize");
+	dukglue_register_method(mContext, &cScriptingEngine::networkKillLimit, "networkKillLimit");
+	dukglue_register_method(mContext, &cScriptingEngine::networkTimeLimitSeconds, "networkTimeLimitSeconds");
+	dukglue_register_method(mContext, &cScriptingEngine::networkFriendlyFire, "networkFriendlyFire");
+	dukglue_register_method(mContext, &cScriptingEngine::networkMapSize, "networkMapSize");
+	dukglue_register_method(mContext, &cScriptingEngine::networkMapTerrain, "networkMapTerrain");
+	dukglue_register_method(mContext, &cScriptingEngine::networkMapTerrainSub, "networkMapTerrainSub");
+	dukglue_register_method(mContext, &cScriptingEngine::networkVehicleSet, "networkVehicleSet");
+	dukglue_register_method(mContext, &cScriptingEngine::networkPickupDensity, "networkPickupDensity");
+	dukglue_register_method(mContext, &cScriptingEngine::networkCoverDensity, "networkCoverDensity");
+	dukglue_register_method(mContext, &cScriptingEngine::randomMapOptionsEnabled, "randomMapOptionsEnabled");
+	dukglue_register_method(mContext, &cScriptingEngine::randomMapSeed, "randomMapSeed");
+	dukglue_register_method(mContext, &cScriptingEngine::randomMapSize, "randomMapSize");
+	dukglue_register_method(mContext, &cScriptingEngine::randomMapSizeExplicit, "randomMapSizeExplicit");
+	dukglue_register_method(mContext, &cScriptingEngine::randomMapTerrain, "randomMapTerrain");
+	dukglue_register_method(mContext, &cScriptingEngine::randomMapTerrainSub, "randomMapTerrainSub");
+	dukglue_register_method(mContext, &cScriptingEngine::randomMapVehicleSet, "randomMapVehicleSet");
+	dukglue_register_method(mContext, &cScriptingEngine::randomMapPickupDensity, "randomMapPickupDensity");
+	dukglue_register_method(mContext, &cScriptingEngine::randomMapCoverDensity, "randomMapCoverDensity");
+	dukglue_register_method(mContext, &cScriptingEngine::randomMapProfile, "randomMapProfile");
+	dukglue_register_method(mContext, &cScriptingEngine::randomMapProfileName, "randomMapProfileName");
 }
 
 std::shared_ptr<cPhase> cScriptingEngine::phaseCreate() {
@@ -374,6 +508,179 @@ std::shared_ptr<cMission> cScriptingEngine::getMission() {
 	return g_Fodder->mGame_Data.mMission_Current;
 }
 
+bool cScriptingEngine::networkEnabled() const {
+	return g_Fodder && g_Fodder->mStartParams && g_Fodder->mStartParams->mNetworkEnabled;
+}
+
+int cScriptingEngine::networkGameMode() const {
+	if (!networkEnabled())
+		return 0;
+
+	return (int)g_Fodder->mStartParams->mNetworkGameMode;
+}
+
+uint32_t cScriptingEngine::networkMapSeed() const {
+	if (!networkEnabled())
+		return 0;
+
+	return g_Fodder->mStartParams->mNetworkMapSeed;
+}
+
+int cScriptingEngine::networkPlayerCount() const {
+	if (!networkEnabled())
+		return 1;
+
+	const int TeamCount = (int)g_Fodder->mStartParams->mNetworkTeamCount;
+	const int TeamSize = (int)g_Fodder->mStartParams->mNetworkTeamSize;
+	const int PlayerCount = TeamCount * TeamSize;
+	return std::max(1, std::min(PlayerCount, NETWORK_MAX_PLAYERS));
+}
+
+int cScriptingEngine::networkTeamCount() const {
+	if (!networkEnabled())
+		return 1;
+
+	return std::max(1, std::min((int)g_Fodder->mStartParams->mNetworkTeamCount, NETWORK_MAX_PLAYERS));
+}
+
+int cScriptingEngine::networkTeamSize() const {
+	if (!networkEnabled())
+		return 1;
+
+	return std::max(1, std::min((int)g_Fodder->mStartParams->mNetworkTeamSize, NETWORK_MAX_PLAYERS));
+}
+
+int cScriptingEngine::networkKillLimit() const {
+	if (!networkEnabled())
+		return 0;
+
+	return (int)g_Fodder->mStartParams->mNetworkKillLimit;
+}
+
+int cScriptingEngine::networkTimeLimitSeconds() const {
+	if (!networkEnabled())
+		return 0;
+
+	return (int)g_Fodder->mStartParams->mNetworkTimeLimitSeconds;
+}
+
+bool cScriptingEngine::networkFriendlyFire() const {
+	return networkEnabled() && g_Fodder->mStartParams->mNetworkFriendlyFire;
+}
+
+int cScriptingEngine::networkMapSize() const {
+	if (!networkEnabled())
+		return (int)NETWORK_MAP_SIZE_DEFAULT;
+
+	return (int)g_Fodder->mStartParams->mNetworkMapSize;
+}
+
+int cScriptingEngine::networkMapTerrain() const {
+	if (!networkEnabled())
+		return (int)NETWORK_MAP_TERRAIN_DEFAULT;
+
+	return (int)g_Fodder->mStartParams->mNetworkMapTerrain;
+}
+
+int cScriptingEngine::networkMapTerrainSub() const {
+	if (!networkEnabled())
+		return 0;
+
+	return (int)g_Fodder->mStartParams->mNetworkMapTerrainSub;
+}
+
+int cScriptingEngine::networkVehicleSet() const {
+	if (!networkEnabled())
+		return (int)NETWORK_VEHICLE_SET_DEFAULT;
+
+	return (int)g_Fodder->mStartParams->mNetworkVehicleSet;
+}
+
+int cScriptingEngine::networkPickupDensity() const {
+	if (!networkEnabled())
+		return (int)NETWORK_PICKUP_DENSITY_DEFAULT;
+
+	return (int)g_Fodder->mStartParams->mNetworkPickupDensity;
+}
+
+int cScriptingEngine::networkCoverDensity() const {
+	if (!networkEnabled())
+		return (int)NETWORK_COVER_DENSITY_DEFAULT;
+
+	return (int)g_Fodder->mStartParams->mNetworkCoverDensity;
+}
+
+bool cScriptingEngine::randomMapOptionsEnabled() const {
+	return g_Fodder && g_Fodder->mStartParams && g_Fodder->mStartParams->mRandomMapOptionsEnabled;
+}
+
+uint32_t cScriptingEngine::randomMapSeed() const {
+	if (!randomMapOptionsEnabled())
+		return 0;
+
+	return g_Fodder->mStartParams->mRandomMapSeed;
+}
+
+int cScriptingEngine::randomMapSize() const {
+	if (!randomMapOptionsEnabled())
+		return (int)NETWORK_MAP_SIZE_DEFAULT;
+
+	return (int)g_Fodder->mStartParams->mRandomMapSize;
+}
+
+bool cScriptingEngine::randomMapSizeExplicit() const {
+	return randomMapOptionsEnabled() && g_Fodder->mStartParams->mRandomMapSizeExplicit;
+}
+
+int cScriptingEngine::randomMapTerrain() const {
+	if (!randomMapOptionsEnabled())
+		return (int)NETWORK_MAP_TERRAIN_DEFAULT;
+
+	return (int)g_Fodder->mStartParams->mRandomMapTerrain;
+}
+
+int cScriptingEngine::randomMapTerrainSub() const {
+	if (!randomMapOptionsEnabled())
+		return 0;
+
+	return (int)g_Fodder->mStartParams->mRandomMapTerrainSub;
+}
+
+int cScriptingEngine::randomMapVehicleSet() const {
+	if (!randomMapOptionsEnabled())
+		return (int)NETWORK_VEHICLE_SET_DEFAULT;
+
+	return (int)g_Fodder->mStartParams->mRandomMapVehicleSet;
+}
+
+int cScriptingEngine::randomMapPickupDensity() const {
+	if (!randomMapOptionsEnabled())
+		return (int)NETWORK_PICKUP_DENSITY_DEFAULT;
+
+	return (int)g_Fodder->mStartParams->mRandomMapPickupDensity;
+}
+
+int cScriptingEngine::randomMapCoverDensity() const {
+	if (!randomMapOptionsEnabled())
+		return (int)NETWORK_COVER_DENSITY_DEFAULT;
+
+	return (int)g_Fodder->mStartParams->mRandomMapCoverDensity;
+}
+
+int cScriptingEngine::randomMapProfile() const {
+	if (!randomMapOptionsEnabled())
+		return (int)NETWORK_MAP_PROFILE_DEFAULT;
+
+	return (int)g_Fodder->mStartParams->mRandomMapProfile;
+}
+
+std::string cScriptingEngine::randomMapProfileName() const {
+	if (!randomMapOptionsEnabled())
+		return "";
+
+	return g_Fodder->mStartParams->mRandomMapProfileName;
+}
+
 void cScriptingEngine::guiPrintString(const std::string& pText, const size_t pX, const size_t pY, const bool pLarge, const bool pUnderline) {
 	g_Fodder->mWindow->SetScreenSize(g_Fodder->mVersionCurrent->GetScreenSize());
 	g_Fodder->mGraphics->SetActiveSpriteSheet(eGFX_BRIEFING);
@@ -402,7 +709,9 @@ void cScriptingEngine::mapSave() {
 		getPhase()->SetMapFilename("random");
 	}
 
-	g_Fodder->mMapLoaded->save(getCampaign()->GetPathToFile(getPhase()->GetMapFilename()), true);
+	const std::string MapPath = getCampaign()->GetPathToFile(getPhase()->GetMapFilename());
+	if (!g_Fodder->mMapLoaded->save(MapPath, true))
+		g_Debugger->Error("Failed to save generated map: " + MapPath);
 }
 
 bool cScriptingEngine::scriptCall(const std::string& pFilename) {
@@ -420,7 +729,10 @@ bool cScriptingEngine::scriptCall(const std::string& pFilename) {
 bool cScriptingEngine::scriptsLoadFolder(const std::string& pFolder) {
 
 	auto finalpath = g_ResourceMan->GetScriptPath(pFolder);
-	auto scripts = g_ResourceMan->DirectoryList(finalpath, "js");
+	if (finalpath.empty())
+		return true;
+
+	auto scripts = g_ResourceMan->DirectoryList(finalpath, ".js");
 
 	for (auto scriptFile : scripts) {
 
@@ -428,6 +740,7 @@ bool cScriptingEngine::scriptsLoadFolder(const std::string& pFolder) {
 		auto script = g_ResourceMan->FileReadStr(finalpath + scriptFile);
 		
 		if (!script.size() || (scriptRun(script, finalName) == false)) {
+            mScriptsLoaded = false;
 			g_Debugger->Error(finalpath + scriptFile + " Failed to execute script:" + scriptFile);
 			return false;
 		}
@@ -437,6 +750,7 @@ bool cScriptingEngine::scriptsLoadFolder(const std::string& pFolder) {
 }
 
 bool cScriptingEngine::scriptRun(const std::string& pJS, const std::string& pFilename) {
+    if(mJit) return mJit->run(pJS, pFilename);
 	int success = DUK_EXEC_ERROR;
 
 	// Compile the JS into bytecode
@@ -464,8 +778,10 @@ bool cScriptingEngine::scriptRun(const std::string& pJS, const std::string& pFil
 }
 
 bool cScriptingEngine::Run(const std::string& pScript) {
+    if(!mScriptsLoaded) return false;
 
 	dukglue_register_global(mContext, this, "Engine");
+    if(mJit) mJit->syncEngine();
 
 	auto path = g_ResourceMan->GetScriptPath(pScript);
 	auto script = g_ResourceMan->FileReadStr(path);
@@ -476,4 +792,11 @@ bool cScriptingEngine::Run(const std::string& pScript) {
 	}
 
 	return true;
+}
+
+std::string cScriptingEngine::scriptRuntime() const {
+    return mJit ? "chakra-jit" : "duktape";
+}
+std::string cScriptingEngine::scriptRuntimeLibrary() const {
+    return mJit ? mJit->libraryPath() : std::string();
 }

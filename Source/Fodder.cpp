@@ -21,12 +21,174 @@
  */
 
 #include "stdafx.hpp"
+#include "FileSystem.hpp"
+
+#include "Setup/ColdStart.hpp"
 
 #ifdef WIN32
 #include <windows.h>
+#include <direct.h>
 #endif
+#include <cerrno>
+#include <sys/stat.h>
+
+#include <SDL3/SDL.h>
 
 const int16 SIDEBAR_WIDTH = 48;
+
+static const sSavedGame* Game_FindSaveByFile(const std::vector<sSavedGame>& pSaves, const std::string& pFileName)
+{
+    for (const auto& SaveFile : pSaves)
+    {
+        if (SaveFile.mFileName == pFileName)
+            return &SaveFile;
+    }
+
+    return 0;
+}
+
+static const sSavedGame* Game_FindSaveByName(const std::vector<sSavedGame>& pSaves, const std::string& pSaveName)
+{
+    for (const auto& SaveFile : pSaves)
+    {
+        if (SaveFile.mName == pSaveName)
+            return &SaveFile;
+    }
+
+    return 0;
+}
+
+bool cFodder::Game_Save_ToFile(const std::string& pFilename, const std::string& pSaveName)
+{
+    std::ofstream outfile(pFilename, std::ios::binary | std::ios::trunc);
+    if (!outfile.is_open())
+        return false;
+
+    outfile << mGame_Data.ToJson(pSaveName);
+    outfile.close();
+
+    if (!outfile.good())
+        return false;
+
+    g_ResourceMan->refresh();
+    return true;
+}
+
+bool cFodder::Game_Load_File(const std::string& pFile)
+{
+    const std::string SaveData = g_ResourceMan->FileReadStr(g_ResourceMan->GetSave(pFile));
+    if (SaveData.empty())
+        return false;
+
+    sGameData SavedData;
+    if (!SavedData.FromJson(SaveData))
+        return false;
+
+    if (SavedData.mSavedVersion.mPlatform != mVersionCurrent->mPlatform)
+    {
+        VersionSwitch(mVersions->GetForCampaign(SavedData.mCampaignName, SavedData.mSavedVersion.mPlatform));
+    }
+
+    if (SavedData.mCampaignName.size())
+    {
+        if (SavedData.mCampaignName == mGame_Data.mCampaign.getName())
+        {
+            SavedData.mCampaign = mGame_Data.mCampaign;
+        }
+        else if (!SavedData.mCampaign.LoadCampaign(SavedData.mCampaignName, SavedData.mCampaignName != mVersionCurrent->mName))
+        {
+            return false;
+        }
+    }
+
+    mGame_Data = SavedData;
+    mMouse_Exit_Loop = false;
+
+    if (mGame_Data.mMission_Phase < 1)
+        mGame_Data.mMission_Phase = 1;
+
+    mGame_Data.mMission_Current = mGame_Data.mCampaign.getMission(mGame_Data.mMission_Number);
+    if (mGame_Data.mMission_Current)
+    {
+        mGame_Data.mPhase_Current = mGame_Data.mMission_Current->PhaseGet(mGame_Data.mMission_Phase);
+        if (!mGame_Data.mPhase_Current)
+        {
+            mGame_Data.mMission_Phase = 1;
+            mGame_Data.mPhase_Current = mGame_Data.mMission_Current->PhaseGet(mGame_Data.mMission_Phase);
+        }
+        mGame_Data.mMission_Phases_Remaining =
+            (int16)mGame_Data.mMission_Current->NumberOfPhases() - (mGame_Data.mMission_Phase - 1);
+    }
+    else
+    {
+        mGame_Data.mPhase_Current = 0;
+    }
+
+    for (int16 x = 0; x < 8; ++x)
+        mMission_Troops_SpritePtrs[x] = INVALID_SPRITE_PTR;
+
+    for (auto &Troop : mGame_Data.mSoldiers_Allocated)
+        Troop.mSprite = INVALID_SPRITE_PTR;
+
+    GameData_Backup();
+    GameData_Restore();
+    return true;
+}
+
+bool cFodder::Game_Load_Latest()
+{
+    auto Files = g_ResourceMan->GetSaves();
+    auto SaveFiles = Game_Load_Filter(Files);
+
+    if (!SaveFiles.size())
+        return false;
+
+    for (const auto& SaveFile : SaveFiles)
+    {
+        if (SaveFile.mFileName == "AUTOSAVE.ofg")
+        {
+            if (Game_Load_File(SaveFile.mFileName))
+                return true;
+        }
+    }
+
+    for (const auto& SaveFile : SaveFiles)
+    {
+        if (SaveFile.mFileName == "AUTOSAVE.ofg")
+            continue;
+
+        if (Game_Load_File(SaveFile.mFileName))
+            return true;
+    }
+
+    return false;
+}
+
+void cFodder::Game_Save_Autosave()
+{
+    if (!mParams->mCheatsEnabled)
+        return;
+
+    auto Paths = g_ResourceMan->getValidPaths();
+    if (Paths.size() == 0)
+        return;
+
+    const std::string SaveDir = Paths[0] + g_ResourceMan->PathGenerate("", eSave);
+    const std::string SaveDirName = SaveDir.back() == '/' || SaveDir.back() == '\\' ? SaveDir.substr(0, SaveDir.size() - 1) : SaveDir;
+    if (!g_ResourceMan->FileExists(SaveDirName))
+    {
+#ifdef WIN32
+        if (_mkdir(SaveDirName.c_str()) != 0 && errno != EEXIST)
+            return;
+#else
+        if (mkdir(SaveDirName.c_str(), 0777) != 0 && errno != EEXIST)
+            return;
+#endif
+    }
+
+    const std::string Filename = Paths[0] + g_ResourceMan->PathGenerate("AUTOSAVE.ofg", eSave);
+    Game_Save_ToFile(Filename, "AUTOSAVE");
+}
 
 cFodder::cFodder(std::shared_ptr<cWindow> pWindow)
 {
@@ -102,6 +264,23 @@ cFodder::cFodder(std::shared_ptr<cWindow> pWindow)
 
     mSoundEffectToPlay = 0;
     mBriefing_Aborted = 0;
+
+#ifdef OPENFODDER_ENABLE_NETWORK
+    mNetLocalPlayerIndex = 0;
+    mNetFrameCount       = 0;
+    mNet_P2_CursorX      = 0;
+    mNet_P2_CursorY      = 0;
+    mNet_RemoteCursorSprite = 0;
+    mNetKeyFlagsLocal    = 0;
+    mNetMapOverlayActive = false;
+    mNetSidebarLeftWasDown = false;
+    memset(mNetSquadOwner, NETWORK_INVALID_SQUAD_OWNER, sizeof(mNetSquadOwner));
+    for (int Player = 0; Player < NETWORK_MAX_PLAYERS; ++Player) {
+        mNetSquadOwner[Player] = static_cast<int8>(Player);
+        mNetSelectedSquad[Player] = static_cast<int8>(Player);
+    }
+    memset(mNetInputs, 0, sizeof(mNetInputs));
+#endif
     mGUI_Mouse_Modifier_X = 0;
     mGUI_Mouse_Modifier_Y = 0;
 
@@ -150,7 +329,7 @@ cFodder::cFodder(std::shared_ptr<cWindow> pWindow)
     mCustom_ExitMenu = 0;
 
     mBriefingHelicopter_NotDone = 0;
-    word_3A05F = 0;
+    mSidebar_Name_CenterX = 0;
     byte_44AC0 = 0;
     mSoundDisabled = false;
     Squad_Walk_Target_SetAll(0);
@@ -216,7 +395,6 @@ cFodder::cFodder(std::shared_ptr<cWindow> pWindow)
 
 cFodder::~cFodder()
 {
-
     delete mSurfaceMapOverview;
 }
 
@@ -260,18 +438,6 @@ int16 cFodder::Phase_Cycle()
     else
     {
 
-#ifdef EMSCRIPTEN
-        if (mPhase_InterruptTicks < 3)
-        {
-
-            return 1;
-        }
-        if (mExit)
-        {
-            return -1;
-        }
-#else
-
         do
         {
             Video_Sleep();
@@ -287,7 +453,6 @@ int16 cFodder::Phase_Cycle()
                 return -1;
             }
         } while (mPhase_InterruptTicks < 3);
-#endif
     }
 
     ++mMission_EngineTicks;
@@ -339,10 +504,8 @@ int16 cFodder::Phase_Cycle()
 
     // Mouse_DrawCursor();
 
-#ifndef EMSCRIPTEN
     if (mSurface->isPaletteAdjusting())
         mSurface->palette_FadeTowardNew();
-#endif
     if (mPhase_ShowMapOverview && mSurfaceMapOverview)
     {
 
@@ -421,6 +584,12 @@ void cFodder::Phase_Paused()
 
 void cFodder::Phase_Prepare()
 {
+#ifdef OPENFODDER_ENABLE_NETWORK
+    // Seed the RNG BEFORE any setup code so both machines produce identical
+    // enemy placement, aggression, and sprite initialisation.
+    if (mStartParams->mNetworkEnabled)
+        mRandom.setSeed((int16)mStartParams->mNetworkMapSeed);
+#endif
 
     Map_Load();
     Map_Load_Sprites();
@@ -502,6 +671,8 @@ void cFodder::Phase_Prepare()
     Window_UpdateScreenSize();
 
     mSurface->Save();
+
+    Phase_Prepare_Network();
 }
 
 int16 cFodder::Phase_Loop()
@@ -533,14 +704,10 @@ int16 cFodder::Phase_Loop()
                 eventsProcess();
             }
 
-#ifdef EMSCRIPTEN
-            mVideo_Ticked = true;
-#else
             while (!mVideo_Ticked && !mExit)
             {
                 SDL_Delay(0);
             }
-#endif
         }
     }
 
@@ -574,9 +741,18 @@ void cFodder::Video_Sleep(cSurface *pSurface, const bool pShrink, const bool pVs
     }
 
     // If not in vsync mode, then wait for the Amiga 50Hz Interrupt
-#if defined(_OFED) || defined(EMSCRIPTEN)
+#if defined(_OFED)
     mVideo_Ticked = true;
 #else
+#ifdef EMSCRIPTEN
+    if (pVsync)
+    {
+        // SDL's browser swap interval controls the interrupt callback, not
+        // this synchronous flow. Pace briefing animation frames explicitly.
+        const float refreshRate = mWindow->GetRefreshRate();
+        emscripten_sleep(static_cast<unsigned int>(1000.0f / (refreshRate > 0 ? refreshRate : 60.0f)));
+    }
+#endif
     if (!pVsync)
     {
         while (!mVideo_Ticked)
@@ -597,6 +773,18 @@ void cFodder::Interrupt_Redraw()
 {
     {
         std::lock_guard<std::mutex> lock(mSurfaceMtx);
+
+#ifdef OPENFODDER_ENABLE_NETWORK
+        // During active GGPO gameplay the main thread owns all rendering;
+        // the interrupt thread just signals Video_Sleep callers.
+        // Between phases the session is stopped (see Mission_Loop), so the
+        // normal interrupt path runs for scroll animations and palette fades.
+        if (mStartParams->mNetworkEnabled && mNetSession && mNetSession->IsRunning()) {
+            mVideo_Done    = false;
+            mVideo_Ticked  = true;
+            return;
+        }
+#endif
 
         if (mParams->mDemoPlayback || mParams->mDemoRecord)
             mGame_Data.mDemoRecorded.Tick();
@@ -661,9 +849,11 @@ void cFodder::Interrupt_Sim_Tick()
     static Uint32 startTick = SDL_GetTicks();
     Uint32 currentTick = SDL_GetTicks();
 
-    if (currentTick - startTick < mParams->mSleepDelta)
+    // Match Interrupt_Sim: redraw once per consumed frame, at the configured
+    // engine rate. Asyncify can also yield from audio or modal-screen delays.
+    if (!mVideo_Done || mExit || currentTick - startTick < mParams->mSleepDelta)
     {
-        // return;
+        return;
     }
 
     startTick = currentTick;
@@ -673,6 +863,14 @@ void cFodder::Interrupt_Sim_Tick()
 
 void cFodder::Phase_Loop_Interrupt()
 {
+#ifdef OPENFODDER_ENABLE_NETWORK
+    // During active GGPO gameplay, simulation and input handling are done
+    // inside Network_AdvanceFrame / Network_Tick.  Between phases the
+    // session is stopped (see Mission_Loop), so the normal interrupt path
+    // runs for input, scroll animations, and palette fades.
+    if (mStartParams->mNetworkEnabled && mNetSession && mNetSession->IsRunning())
+        return;
+#endif
 
     // Input disabled or Mission not paused?
     if (!mInput_Enabled || !mPhase_Paused)
@@ -857,7 +1055,7 @@ void cFodder::Phase_EngineReset()
     mPhase_Aborted2 = false;
     mSquad_SwitchWeapon = 0;
     word_3A9B8 = 0;
-    for (uint8 x = 0; x < 3; ++x)
+    for (uint8 x = 0; x < NETWORK_MAX_SQUADS; ++x)
     {
         mSquad_Walk_Target_Indexes[x] = 0;
         mSquad_Walk_Target_Steps[x] = 0;
@@ -881,7 +1079,7 @@ void cFodder::Phase_EngineReset()
     mMouseSetToCursor = 0;
     mSprites_Found_Count = 0;
 
-    for (uint16 x = 0; x < 3; ++x)
+    for (uint16 x = 0; x < NETWORK_MAX_SQUADS; ++x)
     {
         mSquad_Grenades[x] = 0;
         mSquad_Rockets[x] = 0;
@@ -895,7 +1093,7 @@ void cFodder::Phase_EngineReset()
     mCamera_Start_Adjust = false;
     word_3AA1D = 0;
     mCamera_Reached_Target = 0;
-    word_3AA21 = 0;
+    mSidebar_Font_ColorBase = 0;
     mSprite_FaceWeaponTarget = 0;
     word_3AA45 = 0;
     mSquad_Select_Timer = 0;
@@ -934,16 +1132,11 @@ void cFodder::Phase_EngineReset()
     mGUI_Print_String_To_Sidebar = 0;
     mGUI_Squad_NextDraw_Y = 0;
     mGUI_Sidebar_Setup = 0;
-    mGUI_RefreshSquadGrenades[0] = 0;
-    mGUI_RefreshSquadGrenades[1] = 0;
-    mGUI_RefreshSquadGrenades[2] = 0;
-    mGUI_RefreshSquadRockets[0] = 0;
-    mGUI_RefreshSquadRockets[1] = 0;
-    mGUI_RefreshSquadRockets[2] = 0;
-
-    mSquad_CurrentWeapon[0] = eWeapon_None;
-    mSquad_CurrentWeapon[1] = eWeapon_None;
-    mSquad_CurrentWeapon[2] = eWeapon_None;
+    for (uint16 x = 0; x < NETWORK_MAX_SQUADS; ++x) {
+        mGUI_RefreshSquadGrenades[x] = 0;
+        mGUI_RefreshSquadRockets[x] = 0;
+        mSquad_CurrentWeapon[x] = eWeapon_None;
+    }
 
     mMouseDisabled = 0;
     mGUI_Loop_Is_CurrentSquad = 0;
@@ -993,7 +1186,7 @@ void cFodder::Phase_EngineReset()
     mSprites_HumanVehicles.clear();
     dword_3B24B = 0;
 
-    for (uint16 x = 0; x < 3; ++x)
+    for (uint16 x = 0; x < NETWORK_MAX_SQUADS; ++x)
     {
         mSquad_CurrentVehicles[x] = 0;
     }
@@ -1033,7 +1226,7 @@ void cFodder::Phase_EngineReset()
     memset(mSound_Priority, 0, sizeof(mSound_Priority));
     memset(mSound_Timer, 0, sizeof(mSound_Timer));
 
-    for (uint16 x = 0; x < 3; ++x)
+    for (uint16 x = 0; x < NETWORK_MAX_SQUADS; ++x)
         mSquad_EnteredVehicleTimer[x] = 0;
 
     mSprite_OpenCloseDoor_Ptr = 0;
@@ -1092,13 +1285,14 @@ void cFodder::Phase_SquadPrepare()
 {
     mSquad_Grenade_SplitMode = eSquad_Weapon_Split_Half;
     mSquad_Rocket_SplitMode = eSquad_Weapon_Split_Half;
-    mGUI_Sidebar_TroopList_Name_BreakOnSpace = 5;
+    mSidebar_Name_TruncateAt = 5;
     // -1
     mSquads[0] = mSquad_0_Sprites;
     mSquads[1] = mSquad_1_Sprites;
     mSquads[2] = mSquad_2_Sprites;
     mSquads[3] = mSquad_3_Sprites;
     mSquads[4] = mSquad_4_Sprites;
+    mSquads[5] = mSquad_5_Sprites;
 
     for (unsigned int x = 0; x < 9; ++x)
         mSquad_0_Sprites[x] = INVALID_SPRITE_PTR;
@@ -1115,28 +1309,20 @@ void cFodder::Phase_SquadPrepare()
     for (unsigned int x = 0; x < 9; ++x)
         mSquad_4_Sprites[x] = INVALID_SPRITE_PTR;
 
+    for (unsigned int x = 0; x < 9; ++x)
+        mSquad_5_Sprites[x] = INVALID_SPRITE_PTR;
+
     mSprite_Frame1_Modifier = 1;
     mSprite_Frame2_Modifier = 1;
     mSprite_Frame_3_Modifier = 1;
     mGUI_Mouse_Modifier_X = 0x1A;
     mGUI_Mouse_Modifier_Y = 0x12;
 
-    word_3BED5[0] = 2;
-    word_3BED5[1] = 2;
-    word_3BED5[2] = 2;
-    word_3BED5[3] = 2;
-    word_3BED5[4] = 2;
-
-    mSquad_Join_TargetSquad[0] = -1;
-    mSquad_Join_TargetSquad[1] = -1;
-    mSquad_Join_TargetSquad[2] = -1;
-
-    mSquad_Join_TargetSprite[0] = 0;
-    mSquad_Join_TargetSprite[1] = 0;
-    mSquad_Join_TargetSprite[2] = 0;
-    mSquad_Join_TargetSprite[3] = 0;
-    mSquad_Join_TargetSprite[4] = 0;
-    mSquad_Join_TargetSprite[5] = 0;
+    for (unsigned int x = 0; x < NETWORK_MAX_SQUADS; ++x) {
+        word_3BED5[x] = 2;
+        mSquad_Join_TargetSquad[x] = -1;
+        mSquad_Join_TargetSprite[x] = 0;
+    }
 
     mMouse_Locked = false;
 
@@ -1147,10 +1333,7 @@ void cFodder::Phase_SquadPrepare()
 
     mMouseSpriteNew = eSprite_pStuff_Mouse_Cursor;
 
-    mSquads_TroopCount[0] = 0;
-    mSquads_TroopCount[1] = 0;
-    mSquads_TroopCount[2] = 0;
-    mSquads_TroopCount[3] = 0;
+    memset(mSquads_TroopCount, 0, sizeof(mSquads_TroopCount));
 
     mCheckPattern_Position.mX = 0;
     mCheckPattern_Position.mY = 0;
@@ -1707,7 +1890,7 @@ void cFodder::Phase_Goals_Check()
             continue;
 
         int16 Data10 = Data20->mSpriteType;
-        if (Data10 == eSprite_Computer_1 || Data10 == eSprite_Computer_2 || Data10 == eSprite_Computer_3 || Data10 == eSprite_BuildingDoor3 || Data10 == eSprite_BuildingDoor_Reinforced)
+        if (Data10 == eSprite_Computer_1 || Data10 == eSprite_Computer_2 || Data10 == eSprite_Computer_3 || Data10 == eSprite_BunkerDoor_HeavyExplosionOnly || Data10 == eSprite_BunkerDoor_ReinforcedHeavyExplosionOnly)
             goto loc_12620;
 
         if (Data10 == eSprite_BuildingDoor2 || Data10 == eSprite_BuildingDoor)
@@ -2077,6 +2260,11 @@ void cFodder::eventProcess(const cEvent &pEvent)
     case eEvent_Quit:
         Exit(0);
         break;
+
+    case eEvent_FileDrop:
+        if (!pEvent.mDropPath.empty())
+            mDroppedPaths.push_back(pEvent.mDropPath);
+        break;
     }
 }
 
@@ -2112,6 +2300,15 @@ void cFodder::keyProcess(uint8 pKeyCode, bool pPressed)
         mKeyCode = pKeyCode;
     else
         mKeyCode = 0;
+
+    if (mBriefing_Screen_Active && pPressed)
+    {
+        if (mParams->mCheatsEnabled && pKeyCode == SDL_SCANCODE_F5)
+            Game_Save_Autosave();
+
+        if (mParams->mCheatsEnabled && pKeyCode == SDL_SCANCODE_F9 && Game_Load_Latest())
+            mMouse_Exit_Loop = true;
+    }
 
     // Switch between platforms
     if (!mVersionPlatformSwitchDisabled)
@@ -2158,6 +2355,16 @@ void cFodder::keyProcess(uint8 pKeyCode, bool pPressed)
             mWindow->WindowDecrease();
     }
 
+    // Toggle Bilinear Filtering by pressing F8
+    if (pKeyCode == SDL_SCANCODE_F8 && pPressed)
+    {
+        if (g_Fodder->mParams)
+            if(!g_Fodder->mParams->mBilinearFilter)
+                g_Fodder->mParams->mBilinearFilter = true;
+            else
+                g_Fodder->mParams->mBilinearFilter = false;
+    }
+    
     if (pKeyCode == SDL_SCANCODE_F11 && pPressed)
     {
         mWindow->ToggleFullscreen();
@@ -2176,8 +2383,19 @@ void cFodder::keyProcess(uint8 pKeyCode, bool pPressed)
 
     if (pKeyCode == SDL_SCANCODE_ESCAPE && pPressed)
     {
-        mPhase_Aborted = true;
-        mPhase_EscapeKeyAbort = true;
+#ifdef OPENFODDER_ENABLE_NETWORK
+        if (mStartParams->mNetworkEnabled) {
+            if (mNetMapOverlayActive)
+                mNetMapOverlayActive = false;
+            else
+                mNetKeyFlagsLocal |= eNetKey_Escape;
+        }
+        else
+#endif
+        {
+            mPhase_Aborted = true;
+            mPhase_EscapeKeyAbort = true;
+        }
     }
     // In Mission and not on map overview
     if (mPhase_In_Progress && !mPhase_ShowMapOverview)
@@ -2191,32 +2409,98 @@ void cFodder::keyProcess(uint8 pKeyCode, bool pPressed)
                 mKeyControlPressed = 0;
         }
 
-        if (pKeyCode == SDL_SCANCODE_P && pPressed)
+#ifdef OPENFODDER_ENABLE_NETWORK
+        if (mStartParams->mNetworkEnabled &&
+            mNetMapOverlayActive &&
+            pKeyCode != SDL_SCANCODE_M) {
+            return;
+        }
+#endif
+
+        if (pKeyCode == SDL_SCANCODE_P && pPressed) {
+#ifdef OPENFODDER_ENABLE_NETWORK
+            if (mStartParams->mNetworkEnabled)
+                mNetKeyFlagsLocal |= eNetKey_Pause;
+            else
+#endif
             if(!mPhase_ShowMapOverview)
                 mPhase_Paused = !mPhase_Paused;
-
-        if (pKeyCode == SDL_SCANCODE_SPACE && pPressed)
-            ++mSquad_SwitchWeapon;
+        }
 
         if (pKeyCode == SDL_SCANCODE_M && pPressed)
         {
+#ifdef OPENFODDER_ENABLE_NETWORK
+            if (mStartParams->mNetworkEnabled) {
+                if (mSurfaceMapOverview && !mPhase_Finished)
+                    mNetMapOverlayActive = !mNetMapOverlayActive;
+            }
+            else
+#endif
             if (mPhase_Finished == false && !mPhase_Paused)
                 mPhase_ShowMapOverview = -1;
         }
 
+#ifdef OPENFODDER_ENABLE_NETWORK
+        if (mStartParams->mNetworkEnabled && pPressed) {
+            int16 LocalSquad = mSquad_Selected;
+            if (LocalSquad < 0 || LocalSquad >= NETWORK_MAX_SQUADS) {
+                LocalSquad = static_cast<int16>(mNetLocalPlayerIndex);
+                if (mNetLocalPlayerIndex >= 0 && mNetLocalPlayerIndex < NETWORK_MAX_PLAYERS) {
+                    const int16 SelectedSquad = static_cast<int16>(mNetSelectedSquad[mNetLocalPlayerIndex]);
+                    if (SelectedSquad >= 0 && SelectedSquad < NETWORK_MAX_SQUADS)
+                        LocalSquad = SelectedSquad;
+                }
+            }
+
+            if (pKeyCode == SDL_SCANCODE_G && mSquad_Grenades[LocalSquad] > 0)
+                mNetKeyFlagsLocal |= eNetKey_WeaponG;
+
+            if (pKeyCode == SDL_SCANCODE_R && mSquad_Rockets[LocalSquad] > 0)
+                mNetKeyFlagsLocal |= eNetKey_WeaponR;
+
+            if (pKeyCode == SDL_SCANCODE_SPACE) {
+                if (mSquad_CurrentWeapon[LocalSquad] != eWeapon_Rocket &&
+                    mSquad_Rockets[LocalSquad] > 0) {
+                    mNetKeyFlagsLocal |= eNetKey_WeaponR;
+                }
+                else if (mSquad_Grenades[LocalSquad] > 0) {
+                    mNetKeyFlagsLocal |= eNetKey_WeaponG;
+                }
+            }
+        }
+        else
+#endif
+        if (pKeyCode == SDL_SCANCODE_SPACE && pPressed)
+            ++mSquad_SwitchWeapon;
+
         if (pKeyCode == SDL_SCANCODE_1 && pPressed)
         {
+#ifdef OPENFODDER_ENABLE_NETWORK
+            if (mStartParams->mNetworkEnabled)
+                mNetKeyFlagsLocal |= eNetKey_Squad0;
+            else
+#endif
             if (mSquads_TroopCount[0])
                 Squad_Select(0, false);
         }
 
         if (pKeyCode == SDL_SCANCODE_2 && pPressed)
         {
+#ifdef OPENFODDER_ENABLE_NETWORK
+            if (mStartParams->mNetworkEnabled)
+                mNetKeyFlagsLocal |= eNetKey_Squad1;
+            else
+#endif
             if (mSquads_TroopCount[1])
                 Squad_Select(1, false);
         }
         if (pKeyCode == SDL_SCANCODE_3 && pPressed)
         {
+#ifdef OPENFODDER_ENABLE_NETWORK
+            if (mStartParams->mNetworkEnabled)
+                mNetKeyFlagsLocal |= eNetKey_Squad2;
+            else
+#endif
             if (mSquads_TroopCount[2])
                 Squad_Select(2, false);
         }
@@ -2338,7 +2622,9 @@ void cFodder::VersionSwitch(const sGameVersion *pVersion)
     mGraphics = mVersionCurrent->GetGraphics();
 
     if (!mSound)
-        mSound = mVersionCurrent->GetSound();
+        mSound = (mStartParams && mStartParams->mDisableSound)
+            ? std::make_shared<cSound_Null>()
+            : mVersionCurrent->GetSound();
 
     if (!mResources)
     {
@@ -2346,6 +2632,8 @@ void cFodder::VersionSwitch(const sGameVersion *pVersion)
         exit(1);
     }
 
+    // Default for legacy file dialogs. MainMenu_Setup chooses the larger
+    // campaign picker capacity; save dialogs clamp and restore their own limit.
     mGUI_Select_File_ShownItems = PLATFORM_BASED(4, 5);
 
     Window_UpdateScreenSize();
@@ -2572,6 +2860,19 @@ void cFodder::Prepare(std::shared_ptr<sFodderParameters> pParams)
 
     g_ResourceMan->refresh();
 
+    // Cold-start data probe: if no game data has been discovered, bring up
+    // SDL video early enough to host the asset-free download window that
+    // offers to download the demo data from GitHub. SDL3 ref-counts the
+    // subsystem, so the later SDL_Init in cWindow::InitWindow is harmless.
+    SDL_InitSubSystem(SDL_INIT_VIDEO);
+#ifndef EMSCRIPTEN
+    Setup::ColdStartChoice coldChoice = Setup::ColdStartPrompt::PromptIfNoData();
+    if (coldChoice == Setup::ColdStartChoice::Quit) {
+        SDL_Quit();
+        exit(mStartParams->mDisableVideo ? 1 : 0);
+    }
+#endif
+
     if (!g_ResourceMan->isDataAvailable())
         DataNotFound();
 
@@ -2721,7 +3022,6 @@ void cFodder::Sound_Tick()
 }
 void cFodder::Sound_Play(sSprite *pSprite, int16 pSoundEffect, int16 pPriority)
 {
-
     if (mSoundDisabled)
         return;
 
@@ -2731,31 +3031,38 @@ void cFodder::Sound_Play(sSprite *pSprite, int16 pSoundEffect, int16 pPriority)
     d0 = (d0 & 3) | 2;
     word_81DF6 = d0;
 
-    int16 *a4 = mSound_Timer;
-    int16 *a6 = mSound_Priority;
-
-    if (a6[d0] <= pPriority)
+    if (mSound_Priority[d0] <= pPriority)
     {
-        a6[d0] = pPriority;
+        mSound_Priority[d0] = pPriority;
     }
     else
     {
-        if (a4[d0] != 0)
+        if (mSound_Timer[d0] != 0)
         {
             return;
         }
-        a6[d0] = pPriority;
+        mSound_Priority[d0] = pPriority;
     }
-    a4[d0] = 0x0C;
+    mSound_Timer[d0] = 0x0C;
 
     // loc_14BD4
-    int16 Data8 = mCameraX >> 16;
+    int32 ListenerCameraX = mCameraX;
+    int32 ListenerCameraY = mCameraY;
+
+#ifdef OPENFODDER_ENABLE_NETWORK
+    if (mStartParams && mStartParams->mNetworkEnabled && mNet_LocalCamInitialised) {
+        ListenerCameraX = mNet_LocalCam.CameraX;
+        ListenerCameraY = mNet_LocalCam.CameraY;
+    }
+#endif
+
+    int16 Data8 = ListenerCameraX >> 16;
     Data8 += getCameraWidth() / 2;
 
     if (pSprite != INVALID_SPRITE_PTR)
         Data8 -= pSprite->mPosX;
 
-    int16 DataC = mCameraY >> 16;
+    int16 DataC = ListenerCameraY >> 16;
     DataC += getCameraHeight() / 2;
 
     if (pSprite != INVALID_SPRITE_PTR)
@@ -2955,6 +3262,7 @@ int16 cFodder::map_GetRandomY()
 
 uint16 cFodder::tool_RandomGet(size_t pMin, size_t pMax)
 {
+    ++mRandomCallCount;
     uint16 Rand = mRandom.getu();
     uint16 Mod = (uint16)(pMax - pMin + 1);
 
@@ -2963,7 +3271,7 @@ uint16 cFodder::tool_RandomGet(size_t pMin, size_t pMax)
 
 int16 cFodder::tool_RandomGet()
 {
-
+    ++mRandomCallCount;
     return mRandom.get();
 }
 
@@ -3003,73 +3311,78 @@ void cFodder::Game_Save()
 {
     mInput.clear();
     mGUI_Select_File_String_Input_Callback = 0;
-    mSurface->clearBuffer();
 
-    GUI_Element_Reset();
-
-    GUI_Render_Text_Centred("TYPE A SAVE NAME IN", 0x32);
-
-    GUI_Button_Draw("EXIT", 0xA0);
-    GUI_Button_Setup(&cFodder::GUI_Button_Load_Exit);
-
-    mGUI_Select_File_String_Input_Callback = &cFodder::String_Input_Print;
-    GUI_Select_File_Loop(true);
-    mGUI_Select_File_String_Input_Callback = 0;
-
-    if (mGUI_SaveLoadAction != 2)
+    for (;;)
     {
-        mGUI_SaveLoadAction = 1;
+        const std::vector<sSavedGame> SaveFiles = Game_Load_Filter(g_ResourceMan->GetSaves());
+        const std::string SelectedFile = GUI_Save_File("SAVE GAME", SaveFiles);
+
+        if (mGUI_SaveLoadAction == 1)
+            return;
+
+        const sSavedGame* SelectedSave = Game_FindSaveByFile(SaveFiles, SelectedFile);
+
+        if (mGUI_SaveLoadAction == GUI_SAVELOAD_DELETE)
+        {
+            if (!SelectedSave)
+                continue;
+
+            if (GUI_Confirm_Dialog("DELETE SAVE", SelectedSave->mName, "DELETE"))
+            {
+                g_ResourceMan->DeleteSave(SelectedFile);
+                if (mInput == SelectedSave->mName)
+                    mInput.clear();
+            }
+
+            continue;
+        }
+
+        if (mGUI_SaveLoadAction != 2 || !mInput.size())
+            continue;
+
+        const sSavedGame* ExistingSave = Game_FindSaveByName(SaveFiles, mInput);
+
+        if (ExistingSave && !GUI_Confirm_Dialog("OVERWRITE SAVE", ExistingSave->mName, "OVERWRITE"))
+            continue;
+
+        const std::string Filename = ExistingSave
+            ? g_ResourceMan->GetSave(ExistingSave->mFileName)
+            : g_ResourceMan->GetSaveNewName();
+
+        Game_Save_ToFile(Filename, mInput);
+        mMouse_Exit_Loop = false;
         return;
     }
-
-    {
-        std::string Filename = g_ResourceMan->GetSaveNewName();
-        std::ofstream outfile(Filename, std::ofstream::binary);
-        outfile << mGame_Data.ToJson(mInput);
-        outfile.close();
-    }
-
-    g_ResourceMan->refresh();
-    mMouse_Exit_Loop = false;
 }
 
 void cFodder::Game_Load()
 {
-    auto Files = g_ResourceMan->GetSaves();
-    std::vector<sSavedGame> SaveFiles;
-
-    SaveFiles = Game_Load_Filter(Files);
-    Files.clear();
-
-    const std::string File = GUI_Select_File("SELECT SAVED GAME", SaveFiles, Files);
-    if (!File.size())
-        return;
-
-    auto SaveData = g_ResourceMan->FileReadStr(g_ResourceMan->GetSave(File));
-
-    // Load the game data from the JSONstd::string((char*)SaveData->data(), SaveData->size()))
-    if (!mGame_Data.FromJson(SaveData))
+    for (;;)
     {
+        auto Files = g_ResourceMan->GetSaves();
+        std::vector<sSavedGame> SaveFiles;
+
+        SaveFiles = Game_Load_Filter(Files);
+        Files.clear();
+
+        const std::string File = GUI_Select_File("SELECT SAVED GAME", SaveFiles, Files, true);
+        if (!File.size())
+            return;
+
+        if (mGUI_SaveLoadAction == GUI_SAVELOAD_DELETE)
+        {
+            const sSavedGame* SelectedSave = Game_FindSaveByFile(SaveFiles, File);
+            const std::string SaveName = SelectedSave ? SelectedSave->mName : File;
+
+            if (GUI_Confirm_Dialog("DELETE SAVE", SaveName, "DELETE"))
+                g_ResourceMan->DeleteSave(File);
+
+            continue;
+        }
+
+        Game_Load_File(File);
         return;
     }
-
-    // If the game was saved on a different platform, lets look for it and attempt to switch
-    if (mGame_Data.mSavedVersion.mPlatform != mVersionCurrent->mPlatform)
-    {
-
-        VersionSwitch(mVersions->GetForCampaign(mGame_Data.mCampaignName, mGame_Data.mSavedVersion.mPlatform));
-    }
-
-    mMouse_Exit_Loop = false;
-
-    for (int16 x = 0; x < 8; ++x)
-        mMission_Troops_SpritePtrs[x] = INVALID_SPRITE_PTR;
-
-    for (auto &Troop : mGame_Data.mSoldiers_Allocated)
-        Troop.mSprite = INVALID_SPRITE_PTR;
-
-    GameData_Backup();
-    GameData_Restore();
 }
 
 std::vector<sSavedGame> cFodder::Game_Load_Filter(const std::vector<std::string> &pFiles)
@@ -3094,7 +3407,24 @@ std::vector<sSavedGame> cFodder::Game_Load_Filter(const std::vector<std::string>
             if (NewData.mSavedVersion.mGame != mVersionCurrent->mGame)
                 continue;
 
-            Results.push_back({CurrentFile, NewData.mSavedName});
+            uint64 Timestamp = NewData.mSavedTimestamp;
+            if (!Timestamp)
+                Timestamp = (uint64)std::atoll(CurrentFile.c_str());
+
+            std::string MissionName;
+            auto Mission = mGame_Data.mCampaign.getMission(NewData.mMission_Number);
+            if (Mission)
+                MissionName = Mission->GetName();
+
+            Results.push_back({
+                CurrentFile,
+                NewData.mSavedName,
+                Timestamp,
+                NewData.mMission_Number,
+                NewData.mMission_Phase,
+                NewData.mRecruits_Available_Count,
+                MissionName
+            });
         }
         catch (...)
         {
@@ -3103,8 +3433,13 @@ std::vector<sSavedGame> cFodder::Game_Load_Filter(const std::vector<std::string>
     }
 
     // Sort newest first
-    std::sort(Results.begin(), Results.end(), [](sSavedGame &pLeft, sSavedGame &pRight)
-              { return std::atoll(pLeft.mFileName.c_str()) > std::atoll(pRight.mFileName.c_str()); });
+    std::sort(Results.begin(), Results.end(), [](const sSavedGame &pLeft, const sSavedGame &pRight)
+    {
+        if (pLeft.mTimestamp != pRight.mTimestamp)
+            return pLeft.mTimestamp > pRight.mTimestamp;
+
+        return std::atoll(pLeft.mFileName.c_str()) > std::atoll(pRight.mFileName.c_str());
+    });
 
     return Results;
 }
@@ -3280,6 +3615,7 @@ void cFodder::Video_SurfaceRender(const bool pRestoreSurface, const bool pShrink
 void cFodder::sleepLoop(int64 pMilliseconds)
 {
 #ifdef EMSCRIPTEN
+    emscripten_sleep(static_cast<unsigned int>(std::max<int64>(0, pMilliseconds)));
     return;
 #endif
     uint64 TimeStarted = SDL_GetTicks();
@@ -3463,7 +3799,7 @@ void cFodder::Playground()
 bool cFodder::Demo_Load()
 {
 
-    std::ifstream DemoContent(mStartParams->mDemoFile, std::ios::binary);
+    std::ifstream DemoContent(FileSystem::Resolve(mStartParams->mDemoFile), std::ios::binary);
     if (DemoContent.is_open())
     {
 
@@ -3514,6 +3850,8 @@ void cFodder::About()
     mService_Draw_List.clear();
     VersionSwitch(mVersions->GetRetail(mParams->mDefaultPlatform, mParams->mDefaultGame));
     if (!mVersionCurrent)
+        VersionSwitch(mVersions->GetRetail(ePlatform::Any, mParams->mDefaultGame));
+    if (!mVersionCurrent)
         VersionSwitch(mVersions->GetDemo());
 
     cAbout About;
@@ -3524,7 +3862,146 @@ void cFodder::About()
     g_Fodder->mPhase_Aborted = false;
 }
 
-void cFodder::CreateRandom(sMapParams pParams)
+void cFodder::KeyboardShortcuts()
+{
+    const auto PreviousInterruptCallback = mInterruptCallback;
+    mInterruptCallback = []() {};
+
+    cKeyboardShortcuts KeyboardShortcuts;
+    while (KeyboardShortcuts.Cycle())
+    {
+    }
+
+    mInterruptCallback = PreviousInterruptCallback;
+    g_Fodder->mPhase_Aborted = false;
+}
+
+bool cFodder::RandomMapOptions_Run(sRandomMapOptions& pOptions, cRandomMapOptionsMenu::eContext pContext)
+{
+    const sGameVersion* originalVersion = mVersionCurrent;
+    // Custom versions replace the graphics object without loading map assets.
+    // A surviving map alone does not mean its background is ready to draw.
+    if (!mMapLoaded || !mMap || mMap->empty() ||
+        (mVersionCurrent && mVersionCurrent->getTileTypes().empty())) {
+        Phase_EngineReset();
+        // The Custom pseudo-version has no tilesets of its own.
+        if (mVersionCurrent && mVersionCurrent->getTileTypes().empty())
+            VersionSwitch(mVersions->GetRetail(mVersionCurrent->mPlatform, mVersionCurrent->mGame));
+        if (!mVersionCurrent || mVersionCurrent->getTileTypes().empty()) return false;
+        MainMenu_CreateBackground();
+        MainMenu_PrepareScenery();
+        Camera_Reset();
+        MapTiles_ResetScrollState();
+        mMapTile_Ptr += 3 * sizeof(uint16);
+        Mouse_Setup();
+    }
+    mMap_Destroy_Tiles.clear();
+    mMouse_Button_Left_Toggle = 0;
+    cRandomMapOptionsMenu Menu;
+    Menu.Open(pOptions, pContext);
+
+    const auto PreviousInterruptCallback = mInterruptCallback;
+    mGraphics->PaletteSet();
+    mSurface->palette_FadeTowardNew();
+
+    mInterruptCallback = [&Menu, this]() {
+        Menu.Draw();
+        mGraphics->SetActiveSpriteSheet(eGFX_IN_GAME);
+        Mouse_DrawCursor();
+    };
+
+    mInterruptCallback();
+    while (!Menu.IsDone() && !mExit) {
+        if (mSurface->isPaletteAdjusting())
+            mSurface->palette_FadeTowardNew();
+
+        if (Mouse_Button_Left_Toggled() >= 0)
+            GUI_Handle_Element_Mouse_Check(mGUI_Elements);
+
+        if (mPhase_EscapeKeyAbort || mPhase_Aborted) {
+            mPhase_EscapeKeyAbort = false;
+            mPhase_Aborted = false;
+            Menu.OnBack();
+        }
+
+        Menu.Tick();
+        Video_Sleep();
+    }
+
+    const bool Accepted = !mExit && Menu.WasAccepted();
+    if (Accepted)
+        pOptions = Menu.GetOptions();
+
+    if (!mExit && mVersionCurrent != originalVersion) {
+        mInterruptCallback = []() {};
+        mPhase_In_Progress = false;
+        VersionSwitch(originalVersion);
+    }
+    mInterruptCallback = PreviousInterruptCallback;
+    mMouse_Button_Left_Toggle = 0;
+    mMouse_EventLastButtonsPressed = 0;
+    mKeyCode = 0;
+    mKeyCodeAscii = 0;
+    mInput_LastKey = 0;
+    return Accepted;
+}
+
+bool cFodder::RandomMapOptions_RunCampaign()
+{
+    sRandomMapOptions Options;
+    Options.mGameMode = eNetworkGameMode_CoopCampaign;
+    Options.mSeed = mStartParams->mRandomMapOptionsEnabled
+        ? mStartParams->mRandomMapSeed
+        : ((uint32)SDL_GetTicks() ^ (uint32)mRandom.getu());
+    Options.mMapSize = mStartParams->mRandomMapSize;
+    Options.mMapTerrain = mStartParams->mRandomMapTerrain;
+    Options.mMapTerrainSub = mStartParams->mRandomMapTerrainSub;
+    Options.mVehicleSet = mStartParams->mRandomMapVehicleSet;
+    Options.mPickupDensity = mStartParams->mRandomMapPickupDensity;
+    Options.mCoverDensity = mStartParams->mRandomMapCoverDensity;
+    Options.mProfile = mStartParams->mRandomMapProfile;
+    Options.mProfileName = mStartParams->mRandomMapProfileName;
+
+    if (!RandomMapOptions_Run(Options, cRandomMapOptionsMenu::eContext::Campaign))
+        return false;
+
+    mStartParams->mRandomMapOptionsEnabled = true;
+    mStartParams->mRandomMapSeed = Options.mSeed;
+    mStartParams->mRandomMapSize = Options.mMapSize;
+    mStartParams->mRandomMapSizeExplicit = true;
+    mStartParams->mRandomMapTerrain = Options.mMapTerrain;
+    mStartParams->mRandomMapTerrainSub = Options.mMapTerrainSub;
+    mStartParams->mRandomMapVehicleSet = Options.mVehicleSet;
+    mStartParams->mRandomMapPickupDensity = Options.mPickupDensity;
+    mStartParams->mRandomMapCoverDensity = Options.mCoverDensity;
+    mStartParams->mRandomMapProfile = Options.mProfile;
+    mStartParams->mRandomMapProfileName = Options.mProfileName;
+
+    mParams->mRandomMapOptionsEnabled = true;
+    mParams->mRandomMapSeed = Options.mSeed;
+    mParams->mRandomMapSize = Options.mMapSize;
+    mParams->mRandomMapSizeExplicit = true;
+    mParams->mRandomMapTerrain = Options.mMapTerrain;
+    mParams->mRandomMapTerrainSub = Options.mMapTerrainSub;
+    mParams->mRandomMapVehicleSet = Options.mVehicleSet;
+    mParams->mRandomMapPickupDensity = Options.mPickupDensity;
+    mParams->mRandomMapCoverDensity = Options.mCoverDensity;
+    mParams->mRandomMapProfile = Options.mProfile;
+    mParams->mRandomMapProfileName = Options.mProfileName;
+
+    // Random maps lift the original 45-sprite cap so generated content (decor,
+    // structures, pickups, vehicles) isn't truncated. Mirrors the --random CLI path.
+    mStartParams->mSpritesMax = CUSTOM_DEFAULT_MAX_SPRITES;
+    mStartParams->mSpawnEnemyMax = CUSTOM_DEFAULT_MAX_SPAWN;
+    mParams->mSpritesMax = CUSTOM_DEFAULT_MAX_SPRITES;
+    mParams->mSpawnEnemyMax = CUSTOM_DEFAULT_MAX_SPAWN;
+
+    mStartParams->mSkipRecruit = false;
+    mParams->mSkipRecruit = false;
+    return true;
+}
+
+bool cFodder::CreateRandom(sMapParams pParams)
 {
     mSurface->clearBuffer();
 
@@ -3533,6 +4010,10 @@ void cFodder::CreateRandom(sMapParams pParams)
     mGame_Data.mCampaign.setName("Random");
 
     VersionSwitch(mVersions->GetRetail(mParams->mDefaultPlatform, mParams->mDefaultGame));
+    if (!mVersionCurrent)
+        VersionSwitch(mVersions->GetRetail(ePlatform::Any, mParams->mDefaultGame));
+    if (!mVersionCurrent)
+        VersionSwitch(mVersions->GetDemo());
 
     if (!mParams->mRandomFilename.size())
     {
@@ -3542,7 +4023,7 @@ void cFodder::CreateRandom(sMapParams pParams)
     Map_Create(pParams);
 
     if (mParams->mScriptRun.size() == 0)
-        mParams->mScriptRun = "test.js";
+        mParams->mScriptRun = "random.js";
 
     mGame_Data.mMission_Phases_Remaining = 1;
     mGame_Data.mMission_Number = 1;
@@ -3557,15 +4038,22 @@ void cFodder::CreateRandom(sMapParams pParams)
     if (g_Fodder->mStartParams->mDebugger)
         g_ScriptingEngine->debuggerEnable();
 
-    if (g_ScriptingEngine->Run(mParams->mScriptRun))
+    bool generated = g_ScriptingEngine->Run(mParams->mScriptRun);
+    if (generated)
     {
-
         // Ensure final phase is saved
-        mMapLoaded->save(mGame_Data.mPhase_Current->GetMapFilename(), true);
+        const std::string MapPath = mGame_Data.mCampaign.GetPathToFile(mGame_Data.mPhase_Current->GetMapFilename());
+        generated = mMapLoaded->save(MapPath, true);
+        if (!generated)
+            g_Debugger->Error("Failed to save generated map: " + MapPath);
     }
 
-    // Fade out again
+    // Failed generation must not enter gameplay with a partial map.
     Image_FadeOut();
+    if (!generated) {
+        mGame_Data.mCampaign.setRandom(false);
+        return false;
+    }
 
     Map_Load_Sprites();
 
@@ -3573,6 +4061,7 @@ void cFodder::CreateRandom(sMapParams pParams)
     mGame_Data.mMission_Number = 1;
     mGame_Data.mMission_Phase = 1;
     mGame_Data.Phase_Start();
+    return true;
 }
 
 void cFodder::Start()
@@ -3614,6 +4103,35 @@ Start:;
             return;
     }
 
+    // First-run / "data missing" wizard. We trigger when:
+    //  - no retail data was found for either CF1 or CF2 (the engine fell back
+    //    to a demo or to nothing recognisable), OR
+    //  - the user passed --setup explicitly to re-run the wizard.
+    // The wizard runs over the demo background that VersionSwitch just
+    // loaded, so all the GUI primitives are already wired up.
+#ifndef EMSCRIPTEN
+    if (!mParams->mDemoPlayback)
+    {
+        const bool noRetail = !mVersions->AnyRetailAvailable();
+        if (noRetail || mParams->mForceSetupWizard)
+        {
+            // mForceSetupWizard is one-shot: clear it so we don't loop on every
+            // restart of the Start: label.
+            mParams->mForceSetupWizard = false;
+            mStartParams->mForceSetupWizard = false;
+
+            if (Setup_Wizard_Run(/*pHaveAnyVersion*/ mVersionCurrent != nullptr))
+            {
+                // Wizard added new search roots and refresh()-ed. Re-pick the
+                // best version now that retail might be available.
+                const sGameVersion* retail = mVersions->GetRetail(mParams->mDefaultPlatform, mParams->mDefaultGame);
+                if (retail)
+                    VersionSwitch(retail);
+            }
+        }
+    }
+
+#endif
     if (mParams->mDemoRecord && mGame_Data.mDemoRecorded.mRecordedPlatform == ePlatform::Any)
         mGame_Data.mDemoRecorded.mRecordedPlatform = mVersionCurrent->mPlatform;
 
@@ -3639,6 +4157,20 @@ Start:;
             VersionSwitch(mVersions->GetForCampaign("Random Map", mParams->mDefaultPlatform));
         else
             VersionSwitch(mVersions->GetForCampaign("Single Map", mParams->mDefaultPlatform));
+
+        if (mParams->mRandomMenuOnStart && mParams->mRandom) {
+            mParams->mRandomMenuOnStart = false;
+            mStartParams->mRandomMenuOnStart = false;
+
+            // MainMenu_Setup() normally primes the mouse cursor before
+            // the options menu opens; replicate that here since we skipped it.
+            Mouse_Setup();
+            mMouseSpriteNew = eSprite_pStuff_Mouse_Target;
+
+            if (!RandomMapOptions_RunCampaign())
+                return;
+            mGame_Data.mCampaign.SetSingleMapCampaign();
+        }
     }
     else
     {
@@ -3713,6 +4245,9 @@ bool cFodder::GameOverCheck()
                 return true;
             }
 
+            if (mParams->mCheatsEnabled)
+                Game_Save_Autosave();
+
             if (mVersionDefault->isRandom())
             {
                 mGame_Data.mMission_Recruitment = -1;
@@ -3752,9 +4287,16 @@ int16 cFodder::Mission_Loop()
         {
             if (mVersionDefault->mName == "Random Map")
             {
-                sMapParams Params(mRandom.get());
-                CreateRandom(Params);
-                mGame_Data.mMission_Recruitment = 0;
+                if (!mGame_Data.mCampaign.isRandom())
+                {
+                    const uint32 RandomSeed = mStartParams->mRandomMapOptionsEnabled
+                        ? mStartParams->mRandomMapSeed
+                        : (uint32)mRandom.get();
+                    sMapParams Params(RandomSeed);
+                    if (!CreateRandom(Params))
+                        return -1;
+                    mGame_Data.mMission_Recruitment = 0;
+                }
             }
             else
             {
@@ -3771,19 +4313,21 @@ int16 cFodder::Mission_Loop()
             {
                 mGame_Data.mMission_Recruitment = 0;
 
-                switch (Recruit_Show())
                 {
-                case 0: // Start Mission
-                    break;
+                    switch (Recruit_Show())
+                    {
+                    case 0: // Start Mission
+                        break;
 
-                case -1: // Return to version select
-                    return -1;
+                    case -1: // Return to version select
+                        return -1;
 
-                case -2: // Custom set mode
-                    return -2;
+                    case -2: // Custom set mode
+                        return -2;
 
-                case -3: // Load/Save pressed
-                    continue;
+                    case -3: // Load/Save pressed
+                        continue;
+                    }
                 }
             }
         }
@@ -3792,17 +4336,40 @@ int16 cFodder::Mission_Loop()
 
         WindowTitleSet(true);
 
-        switch (Briefing_Show())
         {
+            switch (Briefing_Show())
+            {
 
-        case -1:
-            return -1; // Return to version select
+            case -1:
+                if (mCustom_Mode == eCustomMode_Map &&
+                    mVersionDefault &&
+                    mVersionDefault->mName == "Random Map" &&
+                    mGame_Data.mCampaign.isRandom())
+                {
+                    mPhase_Aborted = false;
+                    mPhase_EscapeKeyAbort = false;
+                    mBriefing_Aborted = 0;
+                    mMouseButtonStatus = 0;
+                    mMouse_Button_Left_Toggle = 0;
 
-        case 0: // Back to hill
-            continue;
+                    if (!RandomMapOptions_RunCampaign())
+                        return -1;
 
-        case 1: // Continue to phase
-            break;
+                    mGame_Data.mCampaign.SetSingleMapCampaign();
+                    mGame_Data.mMission_Number = 1;
+                    mGame_Data.mMission_Phase = 1;
+                    mGame_Data.Phase_Start();
+                    continue;
+                }
+
+                return -1; // Return to version select
+
+            case 0: // Back to hill
+                continue;
+
+            case 1: // Continue to phase
+                break;
+            }
         }
 
         while (Music_Decrease_Channel_Volume())

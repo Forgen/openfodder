@@ -38,6 +38,17 @@ void cGraphics_Amiga2::Map_Load_Resources() {
     mSpriteSheet_InGame2.mDimension.mHeight = 0x151;
     mSpriteSheet_InGame1.mDimension.mHeight = 0x150;
 
+    auto ValidateRawSize = [](sImage& pImage) {
+        const size_t RowStrideBytes = pImage.mDimension.mWidth >> 3;
+        const size_t RequiredBytes = RowStrideBytes * pImage.mDimension.mHeight * pImage.mPlanes;
+
+        if (pImage.mData->size() < RequiredBytes)
+            pImage = sImage();
+    };
+
+    ValidateRawSize(mSpriteSheet_InGame2);
+    ValidateRawSize(mSpriteSheet_InGame1);
+
     SetActiveSpriteSheet(eGFX_IN_GAME);
 }
 

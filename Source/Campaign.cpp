@@ -21,6 +21,7 @@
  */
 
 #include "stdafx.hpp"
+#include "FileSystem.hpp"
 #include "Utils/json.hpp"
 
 using Json = nlohmann::json;
@@ -39,6 +40,11 @@ const std::vector<std::string> mMissionGoal_Titles = {
     "RESCUE HOSTAGE"            // CF2
 };
 
+static bool Campaign_IsRootedPath(const std::string& pPath)
+{
+    return pPath.size() && (pPath[0] == '/' || pPath[0] == '\\' || (pPath.size() > 1 && pPath[1] == ':'));
+}
+
 cCampaign::cCampaign() {
     Clear();
 }
@@ -49,6 +55,15 @@ std::string cCampaign::GetPathToCampaign() const {
 }
 
 std::string cCampaign::GetPathToFile(const std::string& pName) const {
+    if (Campaign_IsRootedPath(pName))
+        return pName;
+
+    if (mIsRandom)
+    {
+        auto Paths = g_ResourceMan->getValidPaths();
+        if (Paths.size())
+            return Paths[0] + pName;
+    }
 
     return GetPath() + pName;
 }
@@ -176,7 +191,7 @@ bool cCampaign::LoadCampaign(const std::string& pName, bool pCustom, bool pDirec
         mName = pName.substr(0, Final);
     }
 
-    std::ifstream MissionSetFile(GetPathToCampaign());
+    std::ifstream MissionSetFile(FileSystem::Resolve(GetPathToCampaign()));
     if (MissionSetFile.is_open()) {
         Json MissionSet = Json::parse(MissionSetFile);
 

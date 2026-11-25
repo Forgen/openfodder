@@ -51,9 +51,17 @@ Customisations and additions can be made to any of the scripts.
 
 #### Installation
 
-Please see [INSTALL.md](https://github.com/OpenFodder/openfodder/blob/master/INSTALL.md)
+Open Fodder ships as a portable archive. Download the latest release for your
+platform from the [Releases page](https://github.com/OpenFodder/openfodder/releases),
+unzip it anywhere, and run `openfodder` (or `openfodder.exe` on Windows).
 
-For the most recent Windows build, you may obtain the executable built during testing from [Here](https://s3.amazonaws.com/openfodder-builds/OpenFodder-x86-Release-latest.zip) 
+If no game data is found on first launch, OpenFodder will offer to download
+the demo data and scripts from GitHub for you. The About screen also has an
+UPDATE button that checks for newer compatible releases.
+
+* Linux distros / macOS: see [INSTALL.md](https://github.com/OpenFodder/openfodder/blob/master/INSTALL.md) for system data-dir conventions and Flatpak notes
+* Retail data (Cannon Fodder 1/2): [INSTALL.md](https://github.com/OpenFodder/openfodder/blob/master/INSTALL.md#retail-data) covers Amiga ADF, DOS CD, and CD32 layouts
+* Latest CI build (a moving "head" snapshot for testers): [Windows x86 zip](https://s3.amazonaws.com/openfodder-builds/OpenFodder-x86-Release-latest.zip)
   
 #### How to play
 
@@ -74,6 +82,7 @@ Open Fodder supports six demos from the Amiga platform, and three retail release
   -w, --window                  Start in window mode
       --window-scale arg        Set the window scale (default: 0)
       --integer-scaling         Set integer scaling (default: true)
+      --bilinear                Apply bilinear filtering
       --cheats                  Enable cheat keys
 
       --max-sprite 45           Set the maximum sprites (default: 45)
@@ -86,6 +95,7 @@ Open Fodder supports six demos from the Amiga platform, and three retail release
       --unit-test               Run Tests
       --unit-test-headless      Run Tests, with no output
 
+      --headless                Run without video or audio output
       --nosound                 Disable sound output
       --playground              Sprite playground
 	  
@@ -110,6 +120,7 @@ Open Fodder supports six demos from the Amiga platform, and three retail release
 ```
 * F1:    Switch to Amiga version (if available)
 * F2:    Switch to PC version (if available)
+* F8:    Toggle bilinear filter
 * F9:    Make current squad invincible (with --cheats enabled)
 * F10:   Complete current map (with --cheats enabled)
 * F11:   Toggle full screen

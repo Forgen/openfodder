@@ -32,11 +32,14 @@ class cSound;
 struct sGameVersion : public sVersion {
 
 	const std::string				mDataPath;
+	const std::string				mShortName;     // ≤12 chars, UI display ("CF1 AMIGA", "AP+", "NVF", "PCFORMAT")
 	const std::vector<sFile>		mFiles;
 
-	sGameVersion(const std::string& pName, eGame pGame, ePlatform pPlatform, eRelease pRelease, const std::string& pDataPath, const std::vector<sFile>& pFiles) :
-		sVersion(pName,pGame,pPlatform,pRelease), mDataPath(pDataPath), mFiles(pFiles) {
-	
+	sGameVersion(const std::string& pName, eGame pGame, ePlatform pPlatform, eRelease pRelease,
+	             const std::string& pDataPath, const std::string& pShortName,
+	             const std::vector<sFile>& pFiles) :
+		sVersion(pName,pGame,pPlatform,pRelease), mDataPath(pDataPath), mShortName(pShortName), mFiles(pFiles) {
+
 	}
 
 	bool hasGfx(eGFX_Types pGfxType) const {
@@ -109,6 +112,16 @@ public:
     const sGameVersion* GetForTileset(eTileTypes pTileType, eTileSub pSub) const;
     const sGameVersion* GetRetail(const ePlatform pPlatform, const eGame pGame) const;
     const sGameVersion* GetDemo() const;
+
+    bool AnyRetailAvailable() const;
+    bool AnyRetailAvailable(const eGame pGame) const;
+
+    // Pick a version (retail or demo) whose getGfxTypes() includes
+    // eGFX_BRIEFING + eGFX_FONT — i.e. one that can draw menu chrome
+    // (briefing boxes, fonts, buttons). Used by the first-run setup wizard
+    // because most Amiga magazine demos ship without these sheets.
+    // Preference order: any retail → PCFormat → first demo with briefing → null.
+    const sGameVersion* GetVersionForMenuChrome() const;
 };
 
 extern const sGameVersion KnownGameVersions[20];

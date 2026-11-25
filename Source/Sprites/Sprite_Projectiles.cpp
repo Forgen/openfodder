@@ -114,6 +114,7 @@ int16 cFodder::Sprite_Create_Missile(sSprite* pSprite, sSprite*& pData2C) {
     Data30->mRowsToSkip = 0;
     pData2C->mPersonType = pSprite->mPersonType;
     Data30->mPersonType = pSprite->mPersonType;
+    Sprite_SetDamageOwner(pData2C, pSprite);
     pData2C->mDrawOrder = eSprite_Draw_Second;
     Data30->mDrawOrder = eSprite_Draw_First;
     pData2C->mAnimState = eSprite_Anim_None;
@@ -204,6 +205,7 @@ int16 cFodder::Sprite_Create_Grenade2(sSprite* pSprite) {
 
     Data2C->mPersonType = pSprite->mPersonType;
     Data30->mPersonType = pSprite->mPersonType;
+    Sprite_SetDamageOwner(Data2C, pSprite);
 
     Data2C->mDrawOrder = eSprite_Draw_Second;
     Data30->mDrawOrder = eSprite_Draw_First;
@@ -287,6 +289,7 @@ int16 cFodder::Sprite_Create_MissileHoming(sSprite* pSprite, sSprite*& pData2C, 
     Data30->mRowsToSkip = 0;
     pData2C->mPersonType = pSprite->mPersonType;
     Data30->mPersonType = pSprite->mPersonType;
+    Sprite_SetDamageOwner(pData2C, pSprite);
     pData2C->mDrawOrder = eSprite_Draw_Second;
     Data30->mDrawOrder = eSprite_Draw_First;
     pData2C->mAnimState = eSprite_Anim_None;
@@ -737,12 +740,17 @@ void cFodder::Sprite_Handle_GrenadeBox(sSprite* pSprite) {
 
     int16 Data0 = 0;
     pSprite->mSheetIndex = 0xC2;
+
+    if (Sprite_TryHandleSharedPickupBox(pSprite, false))
+        return;
+
     if (Map_Get_Distance_Between_Sprite_And_Squadleader(pSprite, Data0))
         return;
 
     mGUI_RefreshSquadGrenades[mSquad_Selected] = -1;
     mGUI_RefreshSquadRockets[mSquad_Selected] = -1;
     mSquad_Grenades[mSquad_Selected] += 4;
+    Squad_Select_CollectedWeaponIfNeeded(mSquad_Selected, eWeapon_Grenade);
 
     Sprite_Destroy_Wrapper(pSprite);
 }
@@ -755,12 +763,17 @@ void cFodder::Sprite_Handle_RocketBox(sSprite* pSprite) {
 
     int16 Data0 = 0;
     pSprite->mSheetIndex = 0xC3;
+
+    if (Sprite_TryHandleSharedPickupBox(pSprite, true))
+        return;
+
     if (Map_Get_Distance_Between_Sprite_And_Squadleader(pSprite, Data0))
         return;
 
     mGUI_RefreshSquadRockets[mSquad_Selected] = -1;
     mGUI_RefreshSquadGrenades[mSquad_Selected] = -1;
     mSquad_Rockets[mSquad_Selected] += 4;
+    Squad_Select_CollectedWeaponIfNeeded(mSquad_Selected, eWeapon_Rocket);
 
     // Plus uses homing missiles
     if (mVersionCurrent->isCoverDisk())
@@ -1283,6 +1296,7 @@ loc_208A6:;
     Data2C->field_3A = 0;
 
     Data2C->mOwnerSprite = pSprite;
+    Sprite_SetDamageOwner(Data2C, pSprite);
     Data2C->field_2A = 2;
     Data2C->mProjectileOffsetX = 0;
     Data2C->mProjectileOffsetY = 2;
@@ -1369,8 +1383,7 @@ loc_20AC1:;
     return -1;
 
 loc_20ADE:;
-    if (pSprite == mSquad_Leader)
-        mMouse_Button_LeftRight_Toggle = false;
+    Sprite_ClearSelectedSquadWeaponUse(pSprite);
 
     return -1;
 
@@ -1463,10 +1476,9 @@ loc_20B6E:;
     if (pSprite->mSpriteType == eSprite_Enemy)
         Data2C->field_12 += 0x1C;
     Data2C->mDelayCounter = 4;
-    Data2C->mSourceSprite = pSprite;
+    Sprite_SetDamageOwner(Data2C, pSprite);
 
-    if (pSprite == mSquad_Leader)
-        mMouse_Button_LeftRight_Toggle = false;
+    Sprite_ClearSelectedSquadWeaponUse(pSprite);
 
     return 0;
 }
@@ -1478,7 +1490,7 @@ void cFodder::Sprite_Handle_Grenade_Terrain_Check(sSprite* pSprite) {
     if (Map_Terrain_Get_Type_And_Walkable(pSprite, Data0, Data4))
         goto loc_21599;
 
-    if (Data4 == eTerrainFeature_Drop || Data4 == eTerrainFeature_Drop2) {
+    if (Data4 == eTerrainFeature_LedgeDrop || Data4 == eTerrainFeature_PitDrop) {
 
         if (pSprite->mHeight <= 1) {
             pSprite->field_12 = 1;
@@ -1486,8 +1498,8 @@ void cFodder::Sprite_Handle_Grenade_Terrain_Check(sSprite* pSprite) {
         }
     }
     //loc_21561
-    if (Data4 == eTerrainFeature_QuickSand || Data4 == eTerrainFeature_WaterEdge
-        || Data4 == eTerrainFeature_Water) {
+    if (Data4 == eTerrainFeature_SoftHazard || Data4 == eTerrainFeature_ShallowWater
+        || Data4 == eTerrainFeature_DeepWater) {
 
         if (pSprite->mHeight)
             return;
@@ -1641,8 +1653,7 @@ int16 cFodder::Sprite_Create_Rocket(sSprite* pSprite) {
     if (mPhase_Completed_Timer) {
     loc_22592:;
 
-        if (pSprite == mSquad_Leader)
-            mMouse_Button_LeftRight_Toggle = false;
+        Sprite_ClearSelectedSquadWeaponUse(pSprite);
 
         return -1;
     }
@@ -1747,9 +1758,9 @@ int16 cFodder::Sprite_Create_Rocket(sSprite* pSprite) {
     else {
 
         Data2C->mSpriteType = eSprite_Rocket;
-        Data2C->mSourceSprite = pSprite;
     }
 
+    Sprite_SetDamageOwner(Data2C, pSprite);
     Data30->mSpriteType = eSprite_ShadowSmall;
     Data2C->mRowsToSkip = 0;
     Data30->field_32 = 0;
@@ -1760,8 +1771,7 @@ int16 cFodder::Sprite_Create_Rocket(sSprite* pSprite) {
     Data30->mDrawOrder = eSprite_Draw_First;
     Data2C->mDelayCounter = 6;
 
-    if (pSprite == mSquad_Leader)
-        mMouse_Button_LeftRight_Toggle = false;
+    Sprite_ClearSelectedSquadWeaponUse(pSprite);
 
     return 0;
 }

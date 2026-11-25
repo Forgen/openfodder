@@ -20,8 +20,14 @@
  *
  */
 
+#include <cstdint>
+#include <memory>
+
+#include "Network/NetworkTypes.hpp"
+
 struct duk_hthread;
 class cRandomMap;
+class cJitScripting;
 
 class cScriptFileIO {
 	std::fstream mStream;
@@ -38,6 +44,8 @@ public:
 
 class cScriptingEngine {
 	duk_hthread *mContext;
+    std::unique_ptr<cJitScripting> mJit;
+    bool mScriptsLoaded = true;
 
 protected:
 
@@ -55,9 +63,38 @@ protected:
 
 
 	bool scriptCall(const std::string& pFilename);
+    std::string scriptRuntime() const;
+    std::string scriptRuntimeLibrary() const;
 	bool scriptRun(const std::string& pJS, const std::string& pFilename);
 	bool scriptsLoadFolder(const std::string& pFolder);
 	void spritesCreateObject();
+
+	bool networkEnabled() const;
+	int networkGameMode() const;
+	uint32_t networkMapSeed() const;
+	int networkPlayerCount() const;
+	int networkTeamCount() const;
+	int networkTeamSize() const;
+	int networkKillLimit() const;
+	int networkTimeLimitSeconds() const;
+	bool networkFriendlyFire() const;
+	int networkMapSize() const;
+	int networkMapTerrain() const;
+	int networkMapTerrainSub() const;
+	int networkVehicleSet() const;
+	int networkPickupDensity() const;
+	int networkCoverDensity() const;
+	bool randomMapOptionsEnabled() const;
+	uint32_t randomMapSeed() const;
+	int randomMapSize() const;
+	bool randomMapSizeExplicit() const;
+	int randomMapTerrain() const;
+	int randomMapTerrainSub() const;
+	int randomMapVehicleSet() const;
+	int randomMapPickupDensity() const;
+	int randomMapCoverDensity() const;
+	int randomMapProfile() const;
+	std::string randomMapProfileName() const;
 
 public:
 
@@ -69,4 +106,6 @@ public:
 	duk_hthread *getContext() { return mContext; }
 
 	bool Run(const std::string& pScript);
+    bool IsLoaded() const { return mScriptsLoaded; }
+    void Disable() { mScriptsLoaded = false; }
 };

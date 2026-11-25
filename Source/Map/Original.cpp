@@ -155,13 +155,14 @@ bool cOriginalMap::save(std::string pFilename, const bool CF1) {
 	}
 
 	saveHeader();
-	saveCF1Map(pFilename);
-	return saveCF1Sprites(pFilename);
+	return saveCF1Map(pFilename) && saveCF1Sprites(pFilename);
 }
 
 bool cOriginalMap::saveCF1Map(const std::string& pFilename) {
 
 	std::ofstream outfile(pFilename, std::ofstream::binary);
+	if (!outfile.is_open())
+		return false;
 
 	// The original game stores the maps in big endian
 	tool_EndianSwap(mData->data() + 0x60, mData->size() - 0x60);
@@ -171,7 +172,7 @@ bool cOriginalMap::saveCF1Map(const std::string& pFilename) {
 	// Now we can swap it back to little endian
 	tool_EndianSwap(mData->data() + 0x60, mData->size() - 0x60);
 
-	return true;
+	return outfile.good();
 }
 
 bool cOriginalMap::saveCF1Sprites(std::string pFilename) {
@@ -179,6 +180,8 @@ bool cOriginalMap::saveCF1Sprites(std::string pFilename) {
 	// Replace .map with .spt
 	pFilename.replace(pFilename.length() - 3, pFilename.length(), "spt");
 	std::ofstream outfile(pFilename, std::ofstream::binary);
+	if (!outfile.is_open())
+		return false;
 
 	// Number of sprites in use
 	size_t SpriteCount = std::count_if(std::begin(mSprites), std::end(mSprites), [](sSprite& l) {
@@ -223,5 +226,5 @@ bool cOriginalMap::saveCF1Sprites(std::string pFilename) {
 	}
 	outfile.write((const char*)MapSpt->data(), MapSpt->size());
 	outfile.close();
-	return true;
+	return outfile.good();
 }

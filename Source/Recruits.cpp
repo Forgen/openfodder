@@ -1185,20 +1185,23 @@ int16 cFodder::Recruit_Show()
     // Retail / Custom set show the Recruitment Hill
     if (mVersionCurrent->isRetail() || mVersionCurrent->isPCFormat() || mVersionCurrent->isRandom() || mCustom_Mode == eCustomMode_Set)
     {
+        // Network mode: skip interactive recruitment (auto-select defaults).
+        // Both machines must make identical choices to stay in sync.
+        if (!mStartParams->mNetworkEnabled) {
+            // Recruit Screen
+            if (Recruit_Loop())
+                return -1;
 
-        // Recruit Screen
-        if (Recruit_Loop())
-            return -1;
+            Recruit_CheckLoadSaveButtons();
 
-        Recruit_CheckLoadSaveButtons();
-
-        // Did we just load/save a game?
-        if (mRecruit_Button_Load_Pressed || mRecruit_Button_Save_Pressed)
-        {
-            mRecruit_Mission_Restarting = true;
-            mGame_Data.mMission_Recruitment = -1;
-            mPhase_Aborted = true;
-            return -3;
+            // Did we just load/save a game?
+            if (mRecruit_Button_Load_Pressed || mRecruit_Button_Save_Pressed)
+            {
+                mRecruit_Mission_Restarting = true;
+                mGame_Data.mMission_Recruitment = -1;
+                mPhase_Aborted = true;
+                return -3;
+            }
         }
     }
     else
@@ -1586,10 +1589,10 @@ void cFodder::Recruit_Render_Squad_Names()
         }
 
         Data14 <<= 2;
-        word_3A05F = (0x30 - Data14) >> 1;
+        mSidebar_Name_CenterX = (0x30 - Data14) >> 1;
 
         if (mRecruit_Render_Name_SmallGap)
-            word_3A05F -= 1;
+            mSidebar_Name_CenterX -= 1;
 
         // Draw Troop name to list
         for (Data14 = 0; Data14 <= 5; ++Data14)
@@ -1603,7 +1606,7 @@ void cFodder::Recruit_Render_Squad_Names()
 
                 int16 X = Data14;
                 X <<= 2;
-                X += word_3A05F;
+                X += mSidebar_Name_CenterX;
 
                 int16 Y = 0x4B;
                 Y += mSidebar_Draw_Y;
@@ -1712,8 +1715,8 @@ void cFodder::Recruit_Render_HeroList()
         }
 
         Position <<= 2;
-        word_3A05F = (0x30 - Position) >> 1;
-        --word_3A05F;
+        mSidebar_Name_CenterX = (0x30 - Position) >> 1;
+        --mSidebar_Name_CenterX;
 
         for (Position = 0; Position <= 5; ++Position)
         {
@@ -1724,7 +1727,7 @@ void cFodder::Recruit_Render_HeroList()
 
             Character -= 0x41;
             Character += 0x29;
-            Data8 = (Position << 2) + word_3A05F;
+            Data8 = (Position << 2) + mSidebar_Name_CenterX;
             DataC = 0x4B + mSidebar_Draw_Y + mRecruit_Sidebar_Draw_Y_Start;
 
             mGraphics->Sidebar_Copy_Sprite_To_ScreenBufPtr(Character, Data8, DataC + 0x18);

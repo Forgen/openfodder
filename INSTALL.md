@@ -6,20 +6,94 @@ Open Fodder requires campaign/mission data plus files from a demo or retail rele
 of Cannon Fodder. The data must be placed in specific folders depending on your
 operating system.
 
+## Browser build (WSL / Linux)
+
+GitHub Actions builds the browser version on `master`, `feature/**`, pull
+requests, and manual runs of **emscripten-build**. Download
+`OpenFodder-latest-emscripten.zip` from the run's artifacts (retained for
+30 days). Tagged releases also attach `OpenFodder-<version>-emscripten.zip`
+to the GitHub Release alongside the native packages. Both include demo data
+only and support PC audio. Extract the ZIP and follow `README-web.txt` to
+serve it locally.
+
+The browser target uses Emscripten, SDL3, and the regular game flow with
+Asyncify. Install CMake, Ninja, Python 3, and Emscripten 6.0.12 in WSL:
+
+```bash
+mkdir -p ~/.cache/openfodder
+git clone https://github.com/emscripten-core/emsdk.git ~/.cache/openfodder/emsdk
+~/.cache/openfodder/emsdk/emsdk install 6.0.12
+~/.cache/openfodder/emsdk/emsdk activate 6.0.12
+```
+
+From the repository root in Windows, run:
+
+```powershell
+git submodule update --init --recursive Run
+Projects\emscripten\build_emscripten.cmd
+python -m http.server 8080 --bind 127.0.0.1 --directory RunE
+```
+
+Open `http://localhost:8080/OpenFodder.html`. In WSL/Linux, the equivalent
+build command is `bash Projects/emscripten/build.sh`. The script finds the SDK
+above or uses an already activated SDK. `OPENFODDER_WEB_BUILD_DIR` overrides
+the intermediate build directory (default: `~/.cache/openfodder/web-build`).
+
+Serve the four generated `RunE/OpenFodder.{html,js,wasm,data}` files together
+over HTTP; opening the HTML as a local file does not work. The bundle contains
+the seven demo releases, their `.ofc` campaigns, and the runtime scripts.
+The standard build excludes retail data, disk images, local saves, desktop
+binaries, and diagnostic output. The desktop setup/updater, MPEG video, and GGPO
+networking are unavailable in this target. Amiga and PC audio are supported;
+the web build statically links SDL3_mixer with VOC, WAVE, and MOD/libxmp decoders.
+Saves use the browser's IndexedDB storage for the page's origin.
+
+For the browser integration checks, build with
+`-DOPENFODDER_WEB_DIAGNOSTICS=ON`, install Python's `playwright` package and
+its Chromium browser, then run:
+
+```bash
+python3 Projects/emscripten/smoke_test.py
+```
+
+The checks serve the build locally and verify all demo missions, campaign
+discovery, interrupt/engine timing, canvas edge input, save persistence, and
+non-silent PC VOC/MOD output through the browser's Web Audio graph.
+Rebuild with `-DOPENFODDER_WEB_DIAGNOSTICS=OFF` for distribution.
+
 ## Windows
 
-Download the [installer package](https://github.com/OpenFodder/openfodder/releases).
+Download the latest portable archive (`OpenFodder-<version>-win64.zip`) from
+the [Releases page](https://github.com/OpenFodder/openfodder/releases) and
+unzip it anywhere — the executable runs in place. There's no installer to
+run and no admin rights required.
 
-Default data folder:
+On first launch, if OpenFodder cannot find any game data, it will offer to
+download the demo data and scripts from GitHub. You can also click the
+**UPDATE** button on the About screen at any time to check for newer
+compatible releases.
 
-```
-%USERPROFILE%\Documents\OpenFodder
-```
+Default data folders:
 
-The Windows installer includes the demo data. If you have a retail release, copy
-it into the folders below (or use the installer prompt).
+* **Portable** (the working directory contains `Data/`, `Scripts/`, `about.png`,
+  or `openfodder.ini.example`):
 
-Open Fodder also checks the current working directory for an `OpenFodder` folder.
+  ```
+  <unzipped folder>\Data
+  <unzipped folder>\Scripts
+  ```
+
+* **Per-user** (anywhere else, e.g. when the exe is installed under
+  `Program Files` and launched from elsewhere):
+
+  ```
+  %USERPROFILE%\Documents\OpenFodder\Data
+  %USERPROFILE%\Documents\OpenFodder\Scripts
+  ```
+
+If you have retail Cannon Fodder data, copy the files into the matching
+subfolders below. The in-game setup wizard can also locate retail folders or
+mount disk images at runtime.
 
 ## Linux / Unix
 
@@ -42,17 +116,75 @@ The [Flatpak](https://flathub.org/en/apps/org.openfodder.OpenFodder) package use
 Create the `OpenFodder` folder there, then place the campaign data pack and any
 retail data inside it.
 
+The in-app "Download data" prompt and the About-screen UPDATE button are both
+**disabled** under Flatpak. Updates flow through Flatpak itself:
+
+```
+flatpak update org.openfodder.OpenFodder
+```
+
+If your install is missing data files, prefer:
+
+```
+flatpak repair --user org.openfodder.OpenFodder
+```
+
+over a manual side-load — Flatpak's per-app data extension version is recorded
+in the manifest, and a side-load can put the runtime out of sync with it.
+
+## Auto-download (Windows / non-Flatpak Linux / macOS)
+
+When OpenFodder cannot find any data files on first launch, it offers to
+download the complete runtime package from `github.com/OpenFodder/data`.
+The single ZIP includes demo data, campaigns, scripts for random maps,
+multiplayer and the editor, and `about.png`. No separate scripts release is needed.
+
+The About screen also has an UPDATE button that checks for newer compatible
+releases. Both download paths use the engine's hardcoded compatibility range
+(`Source/Setup/EngineVersion.hpp`) and refuse to install a release whose
+declared `dataVersion` / `scriptVersion` falls outside it.
+
+Install destination depends on whether the working directory looks portable:
+
+* **Portable** (cwd contains `Data/`, `Scripts/`, `about.png`, or
+  `openfodder.ini.example`, AND is writable):
+  installs `Data/`, `Scripts/`, `Campaigns/` and `about.png` into `<cwd>`. Used by dev checkouts and
+  the Windows `.zip` distribution.
+
+* **Per-user** (anywhere else, e.g. `/usr/bin/openfodder` with cwd `~`):
+  installs into the per-user OpenFodder data root —
+  `%USERPROFILE%/Documents/OpenFodder` on Windows,
+  `$HOME/Library/Application Support/OpenFodder` on macOS,
+  `$XDG_DATA_HOME/OpenFodder` (or `$HOME/.local/share/OpenFodder`) on Linux —
+  the same paths the engine's read-side scan checks.
+
+Release maintainers: upload the complete ZIP and a separate `compat.json` asset
+containing `{"dataVersion":1,"scriptVersion":1}`. The ZIP has the runtime
+folders at its root, without a repository wrapper. Build it using
+`Tools/BuildRelease.py` in the data repository after initializing submodules;
+GitHub's automatic source archives omit bundled scripts. Compatibility integers
+are independent of release tags; the updater detects compatible fixes by tag.
+Installation preserves existing retail files and saves. Only managed resource
+folders and the About image are replaced, with rollback on publication failure.
+An interrupted install retains `<runtime>/.openfodder-update` for recovery.
+
 ## Data
 
 ### Campaign Data
 
-This data is packaged with the Windows installer, but is a required download if
-you're running on Linux/Unix or building from source.
-
-The campaign information was originally hardcoded in the executable. This is
-required to play and is downloadable alongside six demos from:
+The campaign information was originally hardcoded in the executable. It is
+required to play and is published — alongside six Amiga demos and one PC demo —
+in a separate repository:
 
 https://github.com/OpenFodder/data/releases/
+
+You don't normally need to download this manually: OpenFodder will offer to
+fetch it on first launch (see the auto-download note above), and the About
+screen's UPDATE button keeps it current. The portable Windows release also
+ships a copy bundled inside the .zip. Manual download is only necessary if
+you're running a Flatpak (which uses Flatpak's own update flow), running
+behind a network firewall that blocks GitHub, or building entirely from
+source on a system without network access.
 
   
 ### Retail Data
@@ -83,6 +215,35 @@ OpenFodder/Data/Dos2_CD
 ```
   
 #### Amiga
+
+Amiga disk images can be played directly; extracting them into `Data/Amiga`
+is optional. Open **Options > Add game data > Browse files** (or use the
+first-run welcome screen), select a disk set, and choose **Play from disks**.
+OpenFodder remembers the images and reopens them on the next launch. Keep the
+images at their saved location, with all disks from the same release together.
+Each `imageN=` INI entry identifies a disk set; matching sibling disks are
+rediscovered on launch, so a three-disk set only needs one entry.
+
+Selecting a numbered image such as `Cannon Fodder 2 (Disk 1 of 3).adf` or
+`Cannon.Fodder.1of3.raw` also opens its matching disks. Selecting a folder
+supports arbitrary disk filenames; folders containing several sets offer a
+choice. ADF, IPF and CT RAW sets must contain all required game files before
+play is enabled. **Copy into OpenFodder** is available if you prefer a separate
+extracted installation; existing extracted data continues to work.
+
+This handles AmigaDOS filesystems (CF2) and the linked SOS files on CF1 CSL
+and FLT ADFs, including their different disk-side ordering. Original SOS IPF
+and CT RAW disks are decoded directly by SOS Unpacker's native SDK, compiled
+into OpenFodder. No CAPS DLL or external unpacking step is required. Tracks
+must pass their SOS checksums, and damaged file chains are rejected. Files
+can be read from mounted images or copied into the data folder.
+
+Native builds enable `OPENFODDER_ENABLE_CAPSIMAGE` by default. CMake fetches
+the pinned SDK sources carried by SOS Unpacker and links them statically.
+Existing build caches may need `-DOPENFODDER_ENABLE_CAPSIMAGE=ON` once.
+The SDK's own license and sources are included as `CAPSImage-LICENCE.txt` and
+`SOS-SDK-Source.zip`; the archive includes a standalone CMake rebuild project.
+The extraction methods below remain alternatives.
 
 Please be aware: Cannon Fodder 2 is a typical AmigaDOS disk (SOS Unpacker will
 not work). Use an ADF tool on your machine, such as Directory Opus on Windows

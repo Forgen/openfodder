@@ -22,6 +22,11 @@
 
 #include "Sprites.hpp"
 #include "GameData.hpp"
+#include "Network/NetworkTypes.hpp"
+#include "RandomMapOptionsMenu.hpp"
+#ifdef OPENFODDER_ENABLE_NETWORK
+#include "Network/GGPOSession.hpp"
+#endif
 
 #define INVALID_SPRITE_PTR (sSprite*) -1
 
@@ -64,7 +69,16 @@ union sMapTarget {
 struct sSavedGame {
     std::string mFileName;
     std::string	mName;
+    uint64      mTimestamp = 0;
+    uint16      mMissionNumber = 0;
+    uint16      mMissionPhase = 0;
+    uint16      mTroopsAvailable = 0;
+    std::string mMissionName;
 };
+
+static const int16 GUI_SAVELOAD_DELETE = 7;
+static const int16 GUI_SAVELOAD_SELECT_SAVE = 8;
+static const int16 GUI_MENU_SHORTCUTS = 10;
 
 struct sService_Draw {
     int16 mSpriteType;
@@ -109,8 +123,117 @@ public:
 
     sGameData				mGame_Data;
     sGameData               mGame_Data_Backup;
-    
+
+#ifdef OPENFODDER_ENABLE_NETWORK
+    // -----------------------------------------------------------------------
+    // GGPO cooperative multiplayer state
+    // -----------------------------------------------------------------------
+    std::unique_ptr<cGGPOSession>  mNetSession;
+
+    // Synchronized inputs for the current frame (all active peers).
+    // [P1 input-bus widening 2026-06-08: bus widened from NETWORK_MAX_PLAYERS=2
+    //  to kMaxRollbackPlayers=4 in lockstep with Network_ApplyInputs /
+    //  Network_AdvanceFrame / GGPOSession::SynchronizeInput. Inactive tail
+    //  slots stay {0} via the memset in Fodder.cpp's Network_Reset path.]
+    sNetworkInput           mNetInputs[kMaxRollbackPlayers];
+
+    // Which player slot is local (0 = P1, 1 = P2, ...).
+    int                     mNetLocalPlayerIndex;
+
+    // Frame counter used for GGPO bookkeeping.
+    int                     mNetFrameCount;
+
+    // Player-2 cursor position in screen/map coordinates (for rendering).
+    // [P1: legacy 2P aliases retained for binary-identical N=2 behaviour and
+    //  to avoid touching Fodder.cpp init. The per-peer arrays below are the
+    //  N-player path; at N=2 they stay in lock-step with these scalars.]
+    volatile int16          mNet_P2_CursorX;
+    volatile int16          mNet_P2_CursorY;
+
+    // Remote player's cursor sprite index (for drawing the correct cursor overlay).
+    int16                   mNet_RemoteCursorSprite;
+
+    // [P1: N-player generalisation — per-peer remote cursor arrays.
+    //  Was: single mNet_P2_CursorX/Y (assumed exactly one remote peer).
+    //  Indexed by peer slot; the local peer's slot is unused.]
+    volatile int16          mNet_RemoteCursorX[kMaxRollbackPlayers];
+    volatile int16          mNet_RemoteCursorY[kMaxRollbackPlayers];
+    int16                   mNet_RemoteCursorSpriteArr[kMaxRollbackPlayers];
+
+    // Camera anchor — which player drives the deterministic (rollback) camera.
+    // Defaults to 0 (eNetPlayer_1), matching legacy 2P behaviour. Stored in
+    // GGPO save state so it stays consistent across rollback. UI to retarget
+    // is a P4 polish item; for P1 it stays fixed at 0.
+    // [P1: N-player generalisation — replaces hardcoded eNetPlayer_1 anchors.]
+    uint8_t                 mNetCameraAnchorPlayer;
+
+    // Accumulated key-flag state from SDL events, consumed each GGPO frame.
+    uint8_t                 mNetKeyFlagsLocal;
+
+    // Local-only multiplayer map overlay. This is render/input UI state and
+    // must not be included in GGPO snapshots.
+    bool                    mNetMapOverlayActive;
+    bool                    mNetSidebarLeftWasDown;
+    int16                   mNet_LocalCamSquad;
+
+    // Local SDL cursor in WORLD space — updated only from Mouse_Cursor_Handle
+    // (real SDL input), never from GGPO sync.  Used by Network_GatherLocalInput
+    // so the unfocused window doesn't feed back GGPO-derived positions.
+    int16                   mNet_LocalCursorWorldX;
+    int16                   mNet_LocalCursorWorldY;
+
+    // World-space cursor for each player, derived from synchronized inputs
+    // before Mission_Sprites_Handle() so sprite AI is camera-independent.
+    // [P1: widened from NETWORK_MAX_PLAYERS=2 to kMaxRollbackPlayers=4.]
+    int16                   mNetSquadCursorX[kMaxRollbackPlayers];
+    int16                   mNetSquadCursorY[kMaxRollbackPlayers];
+
+    // Per-player button/mouse toggle state — each player needs independent
+    // tracking so held buttons don't re-trigger and state doesn't bleed.
+    // [P1: widened to kMaxRollbackPlayers.]
+    int16                   mNet_ButtonLeftToggle[kMaxRollbackPlayers];
+    int16                   mNet_ButtonRightToggle[kMaxRollbackPlayers];
+    bool                    mNet_ButtonLRToggle[kMaxRollbackPlayers];
+    bool                    mNet_ButtonLRToggle2[kMaxRollbackPlayers];
+
+    // Per-global-squad walk target memory — prevents Squad_Walk_Target_Set from
+    // injecting one player's last click as a waypoint for the other squad.
+    int16                   mNet_WalkTargetX[NETWORK_MAX_SQUADS];
+    int16                   mNet_WalkTargetY[NETWORK_MAX_SQUADS];
+
+    // Per-player camera pan target — prevents another player's click from moving
+    // the deterministic camera (which must follow the camera anchor only).
+    // [P1: widened to kMaxRollbackPlayers.]
+    int16                   mNet_CameraPanTargetX[kMaxRollbackPlayers];
+    int16                   mNet_CameraPanTargetY[kMaxRollbackPlayers];
+
+    // Deterministic squad ownership.  Sprite::field_32 remains the squad id;
+    // this table says which network player owns that squad.  Today it is
+    // initialised to the existing fixed mapping, but it lets PvP split squads
+    // grow without treating "squad id" as "player id".
+    int8                    mNetSquadOwner[NETWORK_MAX_SQUADS];
+    int8                    mNetSelectedSquad[kMaxRollbackPlayers];
+
+    // Deterministic camera backup — saved after GGPO state-save so we can
+    // override the camera for the local viewport and restore it before the
+    // next simulation step.
+    sNetCameraState         mNet_DetCam;
+
+    // Local viewport camera — persists across frames so scrolling is smooth.
+    // This is render-only; the simulation always restores mNet_DetCam before
+    // advancing a deterministic GGPO frame.
+    sNetCameraState         mNet_LocalCam;
+    bool                    mNet_LocalCamInitialised;
+
+    void                    Network_CameraSave(sNetCameraState& out);
+    void                    Network_CameraRestore(const sNetCameraState& in);
+
+    // Diagnostic sync log — opened by Fodder_Network.cpp, used by Sprite_Core.cpp
+    FILE*                   mNetSyncLogFile = nullptr;
+#endif // OPENFODDER_ENABLE_NETWORK
+
 	cPseudorand				mRandom;
+	uint32					mRandomCallCount;
     sSprite                 mSprite_Spare;
     std::vector<sSprite>    mSprites;
 
@@ -254,8 +377,8 @@ public:
     uint16          mSidebar_SmallMode;
     int32           dword_3A030;
 
-    int8            mSquads_TroopCount[4];
-    uint16          word_3A05F;
+    int8            mSquads_TroopCount[NETWORK_MAX_SQUADS];
+    uint16          mSidebar_Name_CenterX;
 
     std::vector<sSprite*> mSprite_DrawList_First;
     std::vector<sSprite*> mSprite_DrawList_Second;
@@ -293,8 +416,8 @@ public:
     int16           mEnemy_BuildingCount;
     int16           mSquad_SwitchWeapon;
     int16           word_3A9B8;
-    int16           mSquad_Walk_Target_Indexes[3];  // values here, seem to be a byte count originally.. now its an index
-    int16           mSquad_Walk_Target_Steps[3];
+    int16           mSquad_Walk_Target_Indexes[NETWORK_MAX_SQUADS];  // values here, seem to be a byte count originally.. now its an index
+    int16           mSquad_Walk_Target_Steps[NETWORK_MAX_SQUADS];
     int16           mSprite_Bumped_Into_SquadMember;
     int16           mSprite_Player_CheckWeapon;
 
@@ -305,10 +428,10 @@ public:
 
     int16           mSprites_Found_Count;
 
-    int16           mSquad_Grenades[3];
-    int16           mSquad_Rockets[3];
+    int16           mSquad_Grenades[NETWORK_MAX_SQUADS];
+    int16           mSquad_Rockets[NETWORK_MAX_SQUADS];
 
-    int16           mGUI_Squad_Icon[3];
+    int16           mGUI_Squad_Icon[NETWORK_MAX_SQUADS];
 
 	size_t           mTroops_Enemy_Count;
     int16           mHostage_Count;
@@ -317,7 +440,7 @@ public:
     bool            mCamera_Start_Adjust;
     int16           word_3AA1D;             // 2 = Use mSprite_Frame_3
     int16           mCamera_Reached_Target;
-    int16           word_3AA21;
+    int16           mSidebar_Font_ColorBase;
     int16           mSprite_FaceWeaponTarget;
     int16           word_3AA45;
     int16           mSquad_Select_Timer;
@@ -343,9 +466,9 @@ public:
     int16           mGUI_Print_String_To_Sidebar;
     int16           mGUI_Squad_NextDraw_Y;
     int16           mGUI_Sidebar_Setup;
-    int8            mGUI_RefreshSquadGrenades[3];
-    int8            mGUI_RefreshSquadRockets[3];
-    int16           mSquad_CurrentWeapon[3];
+    int8            mGUI_RefreshSquadGrenades[NETWORK_MAX_SQUADS];
+    int8            mGUI_RefreshSquadRockets[NETWORK_MAX_SQUADS];
+    int16           mSquad_CurrentWeapon[NETWORK_MAX_SQUADS];
 
     int16           mGUI_Loop_Is_CurrentSquad;
     int16           word_3AC4B;
@@ -386,7 +509,7 @@ public:
     int16           mMission_Final_TimeToAbort;
     int16           mMission_Save_Blocked[0x18];
 
-    sSprite*        mSquad_CurrentVehicles[3];
+    sSprite*        mSquad_CurrentVehicles[NETWORK_MAX_SQUADS];
     sSprite*        mSquad_CurrentVehicle;
 
     std::vector<sTileTrack> mMapTileTracks;
@@ -428,7 +551,7 @@ public:
     int16           mSound_Priority[4];
     int16           mSound_Timer[6];
 
-    int16           mSquad_EnteredVehicleTimer[3];
+    int16           mSquad_EnteredVehicleTimer[NETWORK_MAX_SQUADS];
     sSprite*        mSprite_OpenCloseDoor_Ptr;
     int16           mSprite_Civilian_GotHome;
     bool            mSwitchesActivated;
@@ -496,26 +619,27 @@ public:
 
     uint16          mSquad_Grenade_SplitMode;
     uint16          mSquad_Rocket_SplitMode;
-    uint16          mGUI_Sidebar_TroopList_Name_BreakOnSpace;
+    uint16          mSidebar_Name_TruncateAt;
 
     sSprite*        mSquad_0_Sprites[9];
     sSprite*        mSquad_1_Sprites[9];
     sSprite*        mSquad_2_Sprites[9];
     sSprite*        mSquad_3_Sprites[9];
     sSprite*        mSquad_4_Sprites[9];
+    sSprite*        mSquad_5_Sprites[9];
 
-    sSprite**       mSquads[5];
+    sSprite**       mSquads[NETWORK_MAX_SQUADS];
     int16           mSprite_Frame1_Modifier;
     int16           mSprite_Frame2_Modifier;
     int16           mSprite_Frame_3_Modifier;
     int16           mGUI_Mouse_Modifier_X;
     int16           mGUI_Mouse_Modifier_Y;
 
-    uint16          word_3BED5[5];
+    uint16          word_3BED5[NETWORK_MAX_SQUADS];
 
     sMapTarget      mSquad_WalkTargets[10][30];
-    int8            mSquad_Join_TargetSquad[3];
-    sSprite*        mSquad_Join_TargetSprite[6];
+    int8            mSquad_Join_TargetSquad[NETWORK_MAX_SQUADS];
+    sSprite*        mSquad_Join_TargetSprite[NETWORK_MAX_SQUADS];
 
     bool            mIntroDone;
 
@@ -594,14 +718,21 @@ public:
     void            Custom_ShowMapSelection();
     void            Campaign_Selection();
 
-    void			Campaign_Select_Sprite_Prepare();
+    void            MainMenu_PrepareScenery();
 
-	void			Campaign_Select_Setup();
+    void            MainMenu_Setup();
 
-	std::string 	Campaign_Select_File(const char* pTitle, const char* pSubTitle, const char* pPath, const char* pType, eDataType pData = eData);
-	void            Campaign_Select_File_Cycle(const char* pTitle, const char* pSubTitle);
-    void            Campaign_Select_File_Loop(const char* pTitle, const char* pSubTitle);
-    void			Campaign_Select_DrawMenu(const char* pTitle, const char* pSubTitle);
+    enum class eMainMenuPage { Home, Campaigns, Help, Keys };
+    eMainMenuPage   mMainMenuPage = eMainMenuPage::Home;
+    std::string     mMainMenuSelection;
+    std::string     MainMenu_Run();
+    void            MainMenu_Draw();
+    void            MainMenu_CreateBackground();
+    void            MainMenu_Button(const std::string& pText, int16 pX, int16 pY,
+                                   int16 pWidth, int16 pAction, int16 pArg = -1);
+    void            MainMenu_OnAction(int16 pAction, int16 pArg);
+    void            MainMenu_Cycle();
+    void            MainMenu_Loop();
 
     void            Image_FadeIn();
     void            Image_FadeOut();
@@ -612,6 +743,7 @@ public:
 	virtual int16	Phase_Cycle();
     virtual int16   Phase_Loop();
 	void			Phase_Prepare();
+    virtual void    Phase_Prepare_Network() {}  // overridden by cFodderMultiplayer
     void            Phase_Paused();
 
     void            Interrupt_Sim();
@@ -640,6 +772,7 @@ public:
     // Map Functions
     void            Map_Create(sMapParams pParams);
     void            Map_Load();
+    bool            Map_RenderPng(const std::string& pMapPath, const std::string& pOutputPath, bool pAddCoords, bool pAddTileIds, size_t pScale);
     void            Map_Load_Sprites();
     void			Map_Count_Sprites();
     void            Map_Load_Resources();
@@ -703,7 +836,7 @@ public:
     void            Phase_GameOver();
     void            Draw_Phase_Paused();
 
-    void            Phase_Show_Complete();
+    virtual void    Phase_Show_Complete();
     void            Phase_Show_TryAgain();
     void            Phase_TextSprite_Prepare(sSprite* pData2C);
     void            Phase_TextSprite_Create_Mission(sSprite* pData2C);
@@ -903,18 +1036,18 @@ public:
     void            Sprite_Handle_Door2_Civilian(sSprite* pSprite);     // 75
     void            Sprite_Handle_Door_Civilian_Spear(sSprite* pSprite);// 76
     void            Sprite_Handle_Cannon(sSprite* pSprite);               // 77
-    void            Sprite_Handle_Turret_Missile_Human(sSprite* pSprite); // 78
-    void            Sprite_Handle_Turret_Missile2_Human(sSprite* pSprite);// 79
+    void            Sprite_Handle_Turret_Cannon_Human(sSprite* pSprite); // 78
+    void            Sprite_Handle_Turret_Missile_Human(sSprite* pSprite);// 79
 
     void            Sprite_Handle_VehicleNoGun_Enemy(sSprite* pSprite);   // 80
     void            Sprite_Handle_VehicleGun_Enemy(sSprite* pSprite);     // 81
     void            Sprite_Handle_Vehicle_Unk_Enemy(sSprite* pSprite);    // 82
     void            Sprite_Handle_Civilian_Invisible(sSprite* pSprite); // 83
-    void            Sprite_Handle_Turret_Missile_Enemy(sSprite* pSprite); // 84
-    void            Sprite_Handle_Turret_Missile2_Enemy(sSprite* pSprite);// 85
+    void            Sprite_Handle_Turret_Cannon_Enemy(sSprite* pSprite); // 84
+    void            Sprite_Handle_Turret_Missile_Enemy(sSprite* pSprite);// 85
     void            Sprite_Handle_Vehicle_Sinking_1(sSprite* pSprite);    // 86
     void            Sprite_Handle_Vehicle_Sinking_2(sSprite* pSprite);    // 87
-    void            Sprite_Handle_BuildingDoor3(sSprite* pSprite);        // 88
+    void            Sprite_Handle_BunkerDoor_HeavyExplosionOnly(sSprite* pSprite);       // 88
     void            Sprite_Handle_Explosion2(sSprite* pSprite);           // 89
 
     void            Sprite_Handle_Door_Civilian_Rescue(sSprite* pSprite);         // 90
@@ -928,7 +1061,7 @@ public:
     void            Sprite_Handle_Bonus_RankHomingInvin_Squad(sSprite* pSprite);      // 98
     void            Sprite_Handle_Helicopter_CallPad(sSprite* pSprite);               // 99
 
-    void            Sprite_Handle_BuildingDoor_Reinforced(sSprite* pSprite);                                      // 100
+    void            Sprite_Handle_BunkerDoor_ReinforcedHeavyExplosionOnly(sSprite* pSprite);                      // 100
     void            Sprite_Handle_Helicopter_Grenade_Human_Called(sSprite* pSprite); // 101
     void            Sprite_Handle_Helicopter_Unarmed_Human_Called(sSprite* pSprite);  // 102
     void            Sprite_Handle_Helicopter_Missile_Human_Called(sSprite* pSprite);  // 103
@@ -971,6 +1104,25 @@ public:
     void            Sprite_Handle_Troop_Animation(sSprite* pSprite);
     void            Sprite_Handle_Troop_Speed(sSprite* pSprite);
     void            Sprite_Handle_Troop_Direct_TowardWeaponTarget_WithRestore(sSprite* pSprite);
+    bool            Sprite_IsActiveSpritePointer(const sSprite* pSprite) const;
+    bool            Sprite_IsVehicle(const sSprite* pSprite) const;
+    const sSprite*  Sprite_GetVehicleController(const sSprite* pVehicle) const;
+    virtual bool    Sprite_UseNetworkHostilityRules() const;
+    void            Sprite_SetDamageOwner(sSprite* pDamageSource, sSprite* pOwner);
+    const sSprite*  Sprite_GetDamageOwner(const sSprite* pSprite) const;
+    virtual void    Sprite_RecordDamage(sSprite* pDamageSource, sSprite* pTarget);
+    virtual bool    Sprite_CanDamageTarget(const sSprite* pDamageSource, const sSprite* pTarget) const;
+    virtual bool    Sprite_CanTargetSprite(const sSprite* pActor, const sSprite* pTarget) const;
+    virtual bool    Sprite_CanVehicleDamageTarget(const sSprite* pVehicle, const sSprite* pTarget) const;
+    virtual bool    Sprite_ShouldDamagePlayerInRegion(const sSprite* pDamageSource, const sSprite* pTarget) const;
+    virtual bool    Sprite_AreHostile(const sSprite* pLeft, const sSprite* pRight) const;
+    virtual bool    Sprite_IsIndependentlyControlledSquadMember(const sSprite* pSprite) const;
+    virtual void    Sprite_GetPlayerRankContext(sSprite* pSprite, int16& pSquad, sSprite*& pLeader);
+    virtual void    Sprite_UpdatePlayerRankLeader(sSprite* pSprite, sSprite* pLeader);
+    virtual void    Sprite_GetMouseDirectionTarget(sSprite* pSprite, int16& pTargetX, int16& pTargetY);
+    virtual bool    Sprite_TryHandleSharedPickupBox(sSprite* pSprite, bool pRocketBox);
+    virtual bool    Sprite_ShouldUseSelectedSquadWeapon(const sSprite* pSprite) const;
+    virtual void    Sprite_ClearSelectedSquadWeaponUse(const sSprite* pSprite);
     void            Sprite_Create_Player_Shadow(sSprite* pSprite);
     int16           Sprite_Create_BloodTrail(sSprite* pSprite, sSprite*& pData2C, sSprite*& pData30);
     void            Sprite_Terrain_Check(sSprite* pSprite, int16& pData4);
@@ -1036,6 +1188,7 @@ public:
     void            Sprite_Handle_Turret(sSprite* pSprite);
     void            Sprite_Handle_Turret_Fire(sSprite* pSprite, sSprite* pData34);
     int16           Sprite_Find_By_Types(sSprite* pSprite, int16& pData0, int16& pData4, int16& pData8, int16& pDataC, int16& pData10, sSprite*& pData28);
+    virtual int16   Sprite_Find_Hostile_By_Types(sSprite* pSprite, int16& pData0, int16& pData4, int16& pData8, int16& pDataC, int16& pData10, sSprite*& pData28);
     void            Sprite_Shadow_Update_From_Height(sSprite* pSprite);
     int16           Sprite_Handle_Vehicle_Sinking(sSprite* pSprite);
     void            Vehicle_Handle_Cannon_Fire(sSprite* pSprite);
@@ -1139,10 +1292,14 @@ public:
     void            Map_Destroy_Tiles();
     void            Map_Destroy_Tiles_Next();
 
+    bool					Game_Load_File(const std::string& pFile);
+    bool                    Game_Load_Latest();
     void					Game_Load();
     std::vector<sSavedGame>	Game_Load_Filter(const std::vector<std::string>& pFiles);
 
     void					Game_Save();
+    bool                    Game_Save_ToFile(const std::string& pFilename, const std::string& pSaveName);
+    void                    Game_Save_Autosave();
 	bool			GameOverCheck();
 
     void            GUI_Handle_Element_Mouse_Check(sGUI_Element* pData20);
@@ -1160,18 +1317,39 @@ public:
 
     void            GUI_Box_Draw(const size_t pColorShadow, const size_t pColorPrimary);
     void            GUI_Select_File_Loop(bool pShowCursor);
-    std::string     GUI_Select_File(const char* pTitle, const std::vector<sSavedGame>& pSave, const std::vector<std::string> &pMaps);
+    std::string     GUI_Select_File(const char* pTitle, const std::vector<sSavedGame>& pSave, const std::vector<std::string> &pMaps, bool pSaveDialog = false);
+    std::string     GUI_Save_File(const char* pTitle, const std::vector<sSavedGame>& pSave);
 
     bool            Options_Menu_Run();
+    bool            Setup_Wizard_Run(bool pHaveAnyVersion);
+
+    // Drag-and-drop sink: paths arriving via SDL_EVENT_DROP_FILE land here
+    // and the active wizard / menu drains them on its own schedule.
+    std::vector<std::string> mDroppedPaths;
 
     void            GUI_Input_CheckKey();
+    void            GUI_Save_Name_Input_Print(int16 pPosY);
     void            GUI_Button_Load_MouseWheel();
     void            GUI_Button_Load_Up();
     void            GUI_Button_Load_Down();
     void            GUI_Button_Load_Exit();
+    void            GUI_Button_Load_Selected();
+    void            GUI_Button_Delete_Selected();
+    void            GUI_Button_Save_Current();
+    void            GUI_Button_Confirm_Yes();
+    void            GUI_Button_Confirm_No();
     void            GUI_Button_Show_About();
+    // Trampoline for the About screen's UPDATE button. GUI_Button_Setup needs
+    // a void(cFodder::*)() member-function pointer, so the actual logic lives
+    // in cAbout::OnUpdateClicked and this just forwards to it.
+    void            GUI_Button_About_Update();
     void            GUI_Button_Show_Options();
+    void            GUI_Button_Show_Multiplayer();
+    void            GUI_Button_Show_Shortcuts();
     void            GUI_Button_Filename();
+    void            GUI_Button_Save_Filename();
+    void            GUI_Button_Save_Dialog_Filename();
+    bool            GUI_Confirm_Dialog(const std::string& pTitle, const std::string& pSubject, const std::string& pConfirmText);
 
     int16           GUI_Button_NoAction();
     void            GUI_Button_NoAction2();
@@ -1248,6 +1426,8 @@ public:
 
     void            Squad_Select_Grenades();
     void            Squad_Select_Rockets();
+    bool            Squad_HasSelectedSpecialWeapon(int16 pSquad) const;
+    void            Squad_Select_CollectedWeaponIfNeeded(int16 pSquad, eWeaponSelected pWeapon);
 
     int16           GUI_Squad_Split_SelectedTroops();
 
@@ -1278,6 +1458,7 @@ public:
     void            Vehicle_Input_Handle();
     void            Squad_Assign_Target_From_Mouse();
     int16           Vehicle_Try_Exit_On_Mouse();
+    sSprite*        Vehicle_GetSelectedSquadVehicle() const;
     void            Vehicle_Target_Set();
 
     void            String_CalculateWidth(int32 pPosX, const uint8* pWidths, const std::string& pString);
@@ -1298,6 +1479,34 @@ public:
     );
     void            String_Print(const uint8* pWidths, int32 pFontSpriteID, size_t pParam08, size_t pParamC, const char* pText);
     void            String_Print(const uint8* pWidths, int32 pFontSpriteID, size_t pParam08, size_t pParamC, const std::string& pText);
+
+    // Paint a hand-drawn 1-bit briefing-font glyph directly to mSurface.
+    // Used by String_Print for ASCII codepoints that don't ship as sprite
+    // frames in pstuff (':' '/' '\\' '(' ')' etc.). pPosX/pPosY are in the
+    // same coordinate system the existing GUI_Draw_Frame_8 uses (both add
+    // 0x10 to compensate for the mSurface 16-pixel border).
+    void            String_Print_DrawTinyGlyph(const struct sBriefingSpecialGlyph* pGlyph,
+                                                 size_t pPosX, size_t pPosY);
+
+    // ===== Sidebar (small) font on the main surface — for menu/lobby use =====
+    //
+    // The pstuff sidebar A-Z font (used in-game for troop names) reused on
+    // out-of-mission menu surfaces. Internally rents a strip of the
+    // mSidebar_Screen_Buffer scratch buffer, paints into it via the proven
+    // Sidebar_Copy_Sprite_To_ScreenBufPtr in-game path, then blits that
+    // strip onto mSurface. This is safe because the in-game sidebar buffer
+    // sits idle when no mission is running.
+    //
+    // Limited to A-Z + space — pstuff carries no digits / punctuation in
+    // this font. Unsupported chars are skipped at draw time. pColor selects
+    // the colour variant (Normal=white, Selected=gold, Inactive=grey).
+
+    enum class eSidebarMenuColor { Normal = 0, Selected = 1, Inactive = 2 };
+
+    void            Sidebar_Menu_Print(const std::string& pText,
+                                        size_t pX, size_t pY,
+                                        eSidebarMenuColor pColor = eSidebarMenuColor::Normal);
+    int32           Sidebar_Menu_MeasureWidth(const std::string& pText);
 
     void            Intro_LegionMessage();
     int16           Intro_Play();
@@ -1364,7 +1573,10 @@ public:
     void            Playground();
 
     void            About();
-	void			CreateRandom(sMapParams pParams);
+    void            KeyboardShortcuts();
+    bool            RandomMapOptions_Run(sRandomMapOptions& pOptions, cRandomMapOptionsMenu::eContext pContext);
+    bool            RandomMapOptions_RunCampaign();
+	bool			CreateRandom(sMapParams pParams);
 	virtual void    Start();
     void            Exit(unsigned int pExitCode);
 
