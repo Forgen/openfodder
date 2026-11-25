@@ -930,17 +930,41 @@ void cGraphics_PC::Load_And_Draw_Image( const std::string &pFilename, unsigned i
 
 	mSurface->clearBuffer();
 
-	for (unsigned int Plane = 0; Plane < 4; Plane++) {
-		Buffer = mSurface->GetSurfaceBuffer() + (16 * mSurface->GetWidth()) + 16;
-		
-		for (unsigned int Y = 0; Y < 200; ++Y) {
+	const uint32 Scale = mSurface->GetScale();
+	if (Scale > 1) {
+		// Scaled-surface path: same de-planarising walk and source byte
+		// sequence, but each dest pixel becomes an SxS block.
+		const size_t Width = mSurface->GetWidth();
+		uint8* Base = mSurface->GetSurfaceBuffer();
 
-			for (unsigned int X = Plane; X < 320; X += 4 ) {
+		for (unsigned int Plane = 0; Plane < 4; Plane++) {
+			for (unsigned int Y = 0; Y < 200; ++Y) {
+				for (unsigned int X = Plane; X < 320; X += 4) {
+					const uint8 Value = *srcBuffer++;
+					uint8* d = Base + ((size_t)(16 + Y) * Scale) * Width + (size_t)(16 + X) * Scale;
 
-				Buffer[X] = *srcBuffer++;
+					for (uint32 sub = 0; sub < Scale; ++sub) {
+						uint8* row = d + sub * Width;
+						for (uint32 k = 0; k < Scale; ++k)
+							row[k] = Value;
+					}
+				}
 			}
+		}
+	}
+	else {
+		for (unsigned int Plane = 0; Plane < 4; Plane++) {
+			Buffer = mSurface->GetSurfaceBuffer() + (16 * mSurface->GetWidth()) + 16;
 
-			Buffer += mSurface->GetWidth();
+			for (unsigned int Y = 0; Y < 200; ++Y) {
+
+				for (unsigned int X = Plane; X < 320; X += 4 ) {
+
+					Buffer[X] = *srcBuffer++;
+				}
+
+				Buffer += mSurface->GetWidth();
+			}
 		}
 	}
 
@@ -1020,6 +1044,23 @@ bool cGraphics_PC::Sprite_OnScreen_Check() {
 	return true;
 }
 
+namespace {
+
+// Write one logical pixel of a heli-intro layer as an SxS block on the
+// scaled surface. pRow/pCol use the original 352-wide buffer geometry
+// (the +16 border is part of the column).
+inline void HeliIntro_PutPixelScaled(uint8* pBuffer, size_t pWidth, uint32 pScale, int32 pRow, int32 pCol, uint8 pValue) {
+	uint8* d = pBuffer + ((size_t)pRow * pScale) * pWidth + (size_t)pCol * pScale;
+
+	for (uint32 sub = 0; sub < pScale; ++sub) {
+		uint8* row = d + sub * pWidth;
+		for (uint32 k = 0; k < pScale; ++k)
+			row[k] = pValue;
+	}
+}
+
+} // namespace
+
 void cGraphics_PC::HeliIntro_BlitMaskedAlignedX(tSharedBuffer pSource, int16 pCx)
 {
 	uint8* pDs = pSource->data();
@@ -1043,6 +1084,57 @@ void cGraphics_PC::HeliIntro_BlitMaskedAlignedX(tSharedBuffer pSource, int16 pCx
 	uint8* base = mSurface->GetSurfaceBuffer() + ((mMission_Intro_DrawY / 352) * mSurface->GetWidth()) + 16 + (dx * 4);
 
 	++dx;
+
+	const uint32 Scale = mSurface->GetScale();
+	if (Scale > 1) {
+		// Scaled-surface path: identical planar walk, segment wrap and
+		// source byte sequence as the unscaled code below, but tracked in
+		// logical (row, column) so each dest pixel becomes an SxS block.
+		const size_t Width = mSurface->GetWidth();
+		uint8* Buffer = mSurface->GetSurfaceBuffer();
+		const int32 StartRow = mMission_Intro_DrawY / 352;
+		const int32 Seg1ColBase = 16 + groupX * 4;
+
+		for (uint8 srcPlane = 0; srcPlane < 4; ++srcPlane) {
+			const int dstPlane = (srcPlane + planeShift) & 3;
+			const int groupCarry = ((srcPlane + planeShift) >> 2) & 1;
+			const int32 Seg1Col = Seg1ColBase + groupCarry * 4 + dstPlane;
+			const int32 Seg2Col = Seg1Col + word_4285F * 4 - 324;
+
+			for (int16 bx = mMission_Intro_DrawX; bx > 0; --bx) {
+				const int32 Row = StartRow + (mMission_Intro_DrawX - bx);
+
+				int32 Col = Seg1Col;
+				for (int16 cx = word_4285F; cx > 0; --cx) {
+					if (pDs >= pDsEnd)
+						return;
+
+					uint8 al = *pDs;
+					if (al)
+						HeliIntro_PutPixelScaled(Buffer, Width, Scale, Row, Col, al);
+
+					++pDs;
+					Col += 4;
+				}
+
+				--pDs;
+
+				Col = Seg2Col;
+				for (int16 cx = dx; cx > 0; --cx) {
+					if (pDs >= pDsEnd)
+						return;
+
+					uint8 al = *pDs;
+					if (al)
+						HeliIntro_PutPixelScaled(Buffer, Width, Scale, Row, Col, al);
+
+					++pDs;
+					Col += 4;
+				}
+			}
+		}
+		return;
+	}
 
 	// Loop the 4 source planes, but map them to dest planes with shift
 	for (uint8 srcPlane = 0; srcPlane < 4; ++srcPlane)
@@ -1111,6 +1203,44 @@ void cGraphics_PC::HeliIntroBlit_OpaqueAlignedX(tSharedBuffer pDsSi, int16 pCx)
 	uint8* base = mSurface->GetSurfaceBuffer() + ((mMission_Intro_DrawY / 352) * mSurface->GetWidth()) + 16 + (groupX * 4);
 
 	++dx;
+
+	const uint32 Scale = mSurface->GetScale();
+	if (Scale > 1) {
+		// Scaled-surface path: same walk and source byte sequence as the
+		// unscaled code below (its unrolled pairs write the same bytes in
+		// the same order), tracked in logical (row, column) so each dest
+		// pixel becomes an SxS block.
+		const size_t Width = mSurface->GetWidth();
+		uint8* Buffer = mSurface->GetSurfaceBuffer();
+		const int32 StartRow = mMission_Intro_DrawY / 352;
+		const int32 Seg1ColBase = 16 + groupX * 4;
+
+		for (uint8 srcPlane = 0; srcPlane < 4; ++srcPlane) {
+			const int dstPlane = (srcPlane + planeShift) & 3;
+			const int groupCarry = ((srcPlane + planeShift) >> 2) & 1;
+			const int32 Seg1Col = Seg1ColBase + groupCarry * 4 + dstPlane;
+			const int32 Seg2Col = Seg1Col + word_4285F * 4 - 324;
+
+			for (int16 bx = mMission_Intro_DrawX; bx > 0; --bx) {
+				const int32 Row = StartRow + (mMission_Intro_DrawX - bx);
+
+				int32 Col = Seg1Col;
+				for (int16 cx = word_4285F; cx > 0; --cx) {
+					HeliIntro_PutPixelScaled(Buffer, Width, Scale, Row, Col, *Ds++);
+					Col += 4;
+				}
+
+				--Ds;
+
+				Col = Seg2Col;
+				for (int16 cx = dx; cx > 0; --cx) {
+					HeliIntro_PutPixelScaled(Buffer, Width, Scale, Row, Col, *Ds++);
+					Col += 4;
+				}
+			}
+		}
+		return;
+	}
 
 	for (uint8 srcPlane = 0; srcPlane < 4; ++srcPlane)
 	{
