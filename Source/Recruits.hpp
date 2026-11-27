@@ -61,7 +61,8 @@ extern const std::vector<sGravePosition> mGravePositions;
 extern const struct sRecruit mRecruits[];
 
 // Custom soldier names, loaded from soldier_names.txt in the current
-// version's game resources folder. Recruit_Get() returns the entry to use
+// version's game resources folder, or from a single global list in
+// Data/ when the version has none. Recruit_Get() returns the entry to use
 // for a recruit id: a custom name when a list was loaded, otherwise the
 // original compiled-in name.
 const sRecruit* Recruit_Get(int16 pRecruitID);
